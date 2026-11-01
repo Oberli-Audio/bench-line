@@ -46,7 +46,7 @@ public:
             const juce::ScopedLock sl (owner.buildLock);
             owner.status.done = done;
             owner.status.total = total;
-            owner.status.message = "Analysing " + juce::String (juce::jmin (done + 1, total)) + " of " + juce::String (total);
+            owner.status.message = "Analyzing " + juce::String (juce::jmin (done + 1, total)) + " of " + juce::String (total);
         }, &cancel);
         {
             const juce::ScopedLock sl (owner.buildLock);
@@ -204,7 +204,7 @@ void BenchLineAudioProcessor::startBuild (const juce::Array<juce::File>& files, 
         status = BuildStatus {};
         status.active = true;
         status.total = files.size();
-        status.message = "Analysing 1 of " + juce::String (files.size());
+        status.message = "Analyzing 1 of " + juce::String (files.size());
     }
     builder = std::make_unique<BuildThread> (*this, files, name);
     builder->startThread (juce::Thread::Priority::low);
