@@ -23,7 +23,7 @@ Tier S, gate G0-G2 sketch. Oberli Audio effect (analyzer, pass-through), Bone th
 **CPU and latency budget.** Zero latency; the analysis runs on a background thread from a lock-free copy of the audio. Editor closed: 0.1 % (the copy only). Editor open: 0.8 % on an M1 at 48 kHz, 128 samples.
 
 **Three structural decisions (sound side).**
-1. The audio path is a wire, always. Bench Line never processes; suggestions are words, not an EQ. A tonal-balance tool that also equalises invites "make it look right" mixing.
+1. The audio path is a wire, always. Bench Line never processes; suggestions are words, not an EQ. A tonal-balance tool that also equalizes invites "make it look right" mixing.
 2. Targets are statistics, not one curve. A target is a median curve plus a tolerance band (the 20th to 80th percentile across many short-term frames of many songs), stored as 31 third-octave values each. Built-in targets ship as these numbers only (no audio), computed once from licensed or own material; the user's targets are built the same way from files they drop.
 3. Compare like with like. Both the mix and the target are measured after K-weighted loudness matching and on a -4.5 dB/oct compensated axis, so the display is flat when the mix sits on the target and the deviations read in plain dB; frames below -40 LUFS short-term are ignored so silence and fades do not pull the curve.
 
