@@ -1,6 +1,6 @@
 # Bench Line - target-curve tonal balance (Tier S sketch)
 
-Tier S, gate G0-G2 sketch. Oberli Audio effect (analyser, pass-through), Bone theme, accent lime #A8D45A (rose rejected 2026-11-01; jade: A B see, iris: Less S, saffron: Align, ember: Clean Up, coral: Sunday Organ, mango: Horizon Pad; check the Design System artifact). Static frame: `bench-line@1x.png` (960 x 520 at 100 %), `bench-line@2x.png` for Retina viewing. Sound side: sound-design-bob is needed for the band analysis, the target statistics and the suggestion rules; the audio path is a wire.
+Tier S, gate G0-G2 sketch. Oberli Audio effect (analyser, pass-through), Bone theme, accent Peacock #039BE5 (analysis and monitoring, category scheme confirmed 2026-11-01). Static frame: `bench-line@1x.png` (960 x 520 at 100 %), `bench-line@2x.png` for Retina viewing. Sound side: sound-design-bob is needed for the band analysis, the target statistics and the suggestion rules; the audio path is a wire.
 
 ## 1. G0 brief
 
@@ -31,7 +31,7 @@ Tier S, gate G0-G2 sketch. Oberli Audio effect (analyser, pass-through), Bone th
 
 1. **Window** 960 x 520 at 100 %, Bone, compact; one display well, the target list on the left like A B see's reference list, so the two plugins feel like one family of tools.
 2. **Hero** is what the ear cannot judge: the mix curve inside the target's tolerance band, with the parts outside the band drawn in the accent, the six region bars below (a mark inside or outside a band, Tonal Balance Control's best idea, kept), and the suggestion lines in words.
-3. **Accent** lime on the set and active only: the tolerance band and target line, the out-of-band curve segments, the outline of out-of-band region marks, the selected View segment and lit LEDs, the knob arc. The mix curve and the meter are ink.
+3. **Accent** Peacock on the set and active only: the tolerance band and target line, the out-of-band curve segments, the outline of out-of-band region marks, the selected View segment and lit LEDs, the knob arc. The mix curve and the meter are ink.
 4. **Sections** from the table's groups: Target (the list), Balance (View, display, regions, suggestions), Output (Average 64 px and a LUFS S meter; no Mix, it is a wire, the A B see line for the brand sheet).
 5. **States**: modified (pill dims when View or Average differ from the preset), drawer, About (charcoal page), bypass, no target (the well shows only the mix curve and the line "Choose a target or build one from your references"), building (a progress hairline in the list row, "Analysing 3 of 6"), Hold (the curve freezes, the LED lights, the readout says since when), silence (curve fades to `ink-subtle` after 2 s below -40 LUFS, regions show no mark rather than a wrong one).
 
@@ -104,7 +104,7 @@ Tooltips:
 
 ## 7. Open decisions for Björn
 - Name: Bench Line (decided 2026-11-01; benchmark plus baseline, the target line on the display). Slug `bench-line`, plugin ID `BenchLine`. The readme and About page add "compares your mix's tonal balance to your references", since the name does not say "tone".
-- Accent: lime (rose rejected 2026-11-01); rose is the last unused one.
+- Accent: Peacock #039BE5, by the category scheme (decided 2026-11-01): one accent per category, analysis and monitoring.
 - Built-in targets at all? They need provenance; the sketch ships five plus the slope, and leads with "Mine".
 - Decided 2026-11-01: Bench Line and A B see share one reference folder (`Oberli Audio/References/`), each file's analysis cached once and read by both.
 
