@@ -7,8 +7,10 @@
 namespace Params
 {
 // IDs are frozen at the first shared build (rule 19). Never rename, never reuse.
-inline constexpr const char* mix = "mix";
-inline constexpr const char* outGain = "outGain";
+inline constexpr const char* view = "view";
+inline constexpr const char* average = "average";
+inline constexpr const char* hold = "hold";
+inline constexpr const char* tolerance = "tolerance";
 inline constexpr const char* bypass = "bypass";
 
 inline juce::String fmt (double v, int decimals) { return decimals <= 0 ? juce::String (juce::roundToInt (v)) : juce::String (v, decimals); }   // decimals 0 = rounded integer, as paramgen's Python prints it
@@ -17,16 +19,20 @@ inline juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout
 {
     using namespace juce;
     AudioProcessorValueTreeState::ParameterLayout layout;
-    layout.add (std::make_unique<AudioParameterFloat> (ParameterID { mix, 1 }, "Mix",
-        NormalisableRange<float> (0.0f, 100.0f, 0.0f, 1.000000f), 100.0f,
+    layout.add (std::make_unique<AudioParameterChoice> (ParameterID { view, 1 }, "View", StringArray { "Tone", "Punch", "Side" }, 0,
+        AudioParameterChoiceAttributes()));
+    layout.add (std::make_unique<AudioParameterFloat> (ParameterID { average, 1 }, "Average",
+        NormalisableRange<float> (1.0f, 60.0f, 0.0f, 0.368634f), 10.0f,
+        AudioParameterFloatAttributes().withLabel ("s")
+            .withStringFromValueFunction ([] (float v, int) { double s = v; return std::abs (s) < 1.0 ? fmt (s * 1000.0, 0) + " ms" : fmt (s, 0) + " s"; })
+            .withValueFromStringFunction ([] (const juce::String& s) { juce::String t = s.trim().replace (",", ".").toLowerCase(); double x = t.retainCharacters ("0123456789.+-").getDoubleValue(); if (t.endsWith ("ms")) return (float) (x / 1000.0); if (t.endsWith ("min") || t.endsWith ("m")) return (float) (x * 60.0); return (float) (x); })));
+    layout.add (std::make_unique<AudioParameterBool> (ParameterID { hold, 1 }, "Hold", false,
+        AudioParameterBoolAttributes().withStringFromValueFunction ([] (bool b, int) { return juce::String (b ? "On" : "Off"); })));
+    layout.add (std::make_unique<AudioParameterFloat> (ParameterID { tolerance, 1 }, "Tolerance",
+        NormalisableRange<float> (50.0f, 90.0f, 0.0f, 1.000000f), 60.0f,
         AudioParameterFloatAttributes().withLabel ("%")
             .withStringFromValueFunction ([] (float v, int) { return fmt (v, 0) + " %"; })
             .withValueFromStringFunction ([] (const juce::String& s) { juce::String t = s.trim().replace (",", ".").toLowerCase(); double x = t.retainCharacters ("0123456789.+-").getDoubleValue(); return (float) x; })));
-    layout.add (std::make_unique<AudioParameterFloat> (ParameterID { outGain, 1 }, "Output",
-        NormalisableRange<float> (-24.0f, 12.0f, 0.0f, 1.000000f), 0.0f,
-        AudioParameterFloatAttributes().withLabel ("dB")
-            .withStringFromValueFunction ([] (float v, int) { return juce::String (v > 0 ? "+" : "") + fmt (v, 1) + " dB"; })
-            .withValueFromStringFunction ([] (const juce::String& s) { juce::String t = s.trim().replace (",", ".").toLowerCase(); if (t == "-inf" || t == "-inf db" || t == "off") return -24.0f; double x = t.retainCharacters ("0123456789.+-").getDoubleValue(); return (float) x; })));
     layout.add (std::make_unique<AudioParameterBool> (ParameterID { bypass, 1 }, "Bypass", false,
         AudioParameterBoolAttributes().withStringFromValueFunction ([] (bool b, int) { return juce::String (b ? "On" : "Off"); })));
     return layout;
@@ -35,8 +41,10 @@ inline juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout
 // Smoothing per parameter: tau in ms (0 = none) and domain (D.1, Law 5). Read once in prepareToPlay.
 struct Smoothing { const char* id; float tauMs; const char* domain; const char* controlRate; };
 inline constexpr Smoothing smoothing[] = {
-    { mix, 20.0f, "linear", "block" },
-    { outGain, 20.0f, "db", "block" },
+    { view, 0.0f, "crossfade", "event" },
+    { average, 0.0f, "log", "block" },
+    { hold, 0.0f, "crossfade", "event" },
+    { tolerance, 0.0f, "linear", "block" },
     { bypass, 0.0f, "crossfade", "event" },
 };
 
@@ -44,8 +52,10 @@ inline constexpr Smoothing smoothing[] = {
 // calls slider.setTooltip (tooltipFor (id)) and setHelpText (tooltipFor (id)); never types text.
 struct Help { const char* id; const char* tooltip; const char* meaning; };
 inline constexpr Help help[] = {
-    { mix, "Dry to wet balance (equal power). Range 0 % to 100 %, default 100 %.", "dry / balanced / wet" },
-    { outGain, "Output level after the mix. Range -24.0 dB to +12.0 dB, default 0.0 dB.", "quiet / unity / loud" },
+    { view, "Tone the spectrum, Punch the dynamics, Side the stereo spectrum. Options Tone, Punch, Side; default Tone.", "" },
+    { average, "Short follows a section, long covers the song. Range 1 s to 60 s, default 10 s.", "" },
+    { hold, "Freezes the curve so you can compare after a change. Default Off.", "" },
+    { tolerance, "Wider accepts more of what your references do. Range 50 % to 90 %, default 60 %.", "" },
     { bypass, "Bypass the plugin (latency compensated). Default Off.", "" },
 };
 inline const char* tooltipFor (const char* id) noexcept
