@@ -1,12 +1,12 @@
 # Bench Line - target-curve tonal balance (Tier S sketch)
 
-Tier S, gate G0-G2 sketch. Oberli Audio effect (analyser, pass-through), Bone theme, accent Peacock #039BE5 (analysis and monitoring, category scheme confirmed 2026-11-01). Static frame: `bench-line@1x.png` (960 x 520 at 100 %), `bench-line@2x.png` for Retina viewing. Sound side: sound-design-bob is needed for the band analysis, the target statistics and the suggestion rules; the audio path is a wire.
+Tier S, gate G0-G2 sketch. Oberli Audio effect (analyzer, pass-through), Bone theme, accent Peacock #039BE5 (analysis and monitoring, category scheme confirmed 2026-11-01). Static frame: `bench-line@1x.png` (960 x 520 at 100 %), `bench-line@2x.png` for Retina viewing. Sound side: sound-design-bob is needed for the band analysis, the target statistics and the suggestion rules; the audio path is a wire.
 
 ## 1. G0 brief
 
 **Users.** Björn mastering the worship EP and the live album, and checking mixes on the master bus while mixing; friends who get the build.
 
-**Why it is a gap.** iZotope Tonal Balance Control 2 and the "match" views of Metric AB and REFERENCE are paid; free analysers (SPAN, FreqAnalyst) show a spectrum but not where it should be. No free VST3 compares a mix to a target range, and Ableton's Spectrum has no target, no curve recall and no tolerance. A B see compares against one reference section; Bench Line compares against the statistics of many references, which is the more stable answer.
+**Why it is a gap.** iZotope Tonal Balance Control 2 and the "match" views of Metric AB and REFERENCE are paid; free analyzers (SPAN, FreqAnalyst) show a spectrum but not where it should be. No free VST3 compares a mix to a target range, and Ableton's Spectrum has no target, no curve recall and no tolerance. A B see compares against one reference section; Bench Line compares against the statistics of many references, which is the more stable answer.
 
 **Core jobs.**
 1. Know in ten seconds whether the mix is too heavy, too thin, too dull or too harsh, against a target that fits the genre.
@@ -33,19 +33,19 @@ Tier S, gate G0-G2 sketch. Oberli Audio effect (analyser, pass-through), Bone th
 2. **Hero** is what the ear cannot judge: the mix curve inside the target's tolerance band, with the parts outside the band drawn in the accent, the six region bars below (a mark inside or outside a band, Tonal Balance Control's best idea, kept), and the suggestion lines in words.
 3. **Accent** Peacock on the set and active only: the tolerance band and target line, the out-of-band curve segments, the outline of out-of-band region marks, the selected View segment and lit LEDs, the knob arc. The mix curve and the meter are ink.
 4. **Sections** from the table's groups: Target (the list), Balance (View, display, regions, suggestions), Output (Average 64 px and a LUFS S meter; no Mix, it is a wire, the A B see line for the brand sheet).
-5. **States**: modified (pill dims when View or Average differ from the preset), drawer, About (charcoal page), bypass, no target (the well shows only the mix curve and the line "Choose a target or build one from your references"), building (a progress hairline in the list row, "Analysing 3 of 6"), Hold (the curve freezes, the LED lights, the readout says since when), silence (curve fades to `ink-subtle` after 2 s below -40 LUFS, regions show no mark rather than a wrong one).
+5. **States**: modified (pill dims when View or Average differ from the preset), drawer, About (charcoal page), bypass, no target (the well shows only the mix curve and the line "Choose a target or build one from your references"), building (a progress hairline in the list row, "Analyzing 3 of 6"), Hold (the curve freezes, the LED lights, the readout says since when), silence (curve fades to `ink-subtle` after 2 s below -40 LUFS, regions show no mark rather than a wrong one).
 
 ## 3. Parameter table (sketch, six columns)
 
 | id | type | name | group | unit / choices | min / max / default |
 |---|---|---|---|---|---|
 | view | choice | View | Balance | Tone \| Punch \| Side | 0 / 2 / 0 |
-| average | float | Average | Output | s, centre 10 | 1 / 60 / 10 |
+| average | float | Average | Output | s, center 10 | 1 / 60 / 10 |
 | hold | bool | Hold | Balance | - | 0 / 1 / 0 |
 | tolerance | float | Tolerance | Balance | %, percentile width | 50 / 90 / 60 |
 | bypass | bool | Bypass | - | - | 0 / 1 / 0 |
 
-Not host parameters (plugin state, saved in the project): the selected target, the user's target library (in the shared `Oberli Audio/References/` folder, read by every Bench Line and A B see instance), the region edges, the suggestion history. Average "60 s" is labelled "Song" in the value string, because that is what it means on a master.
+Not host parameters (plugin state, saved in the project): the selected target, the user's target library (in the shared `Oberli Audio/References/` folder, read by every Bench Line and A B see instance), the region edges, the suggestion history. Average "60 s" is labeled "Song" in the value string, because that is what it means on a master.
 
 Tooltips:
 - View: "Tone compares the spectrum, Punch the low-end dynamics, Side the stereo spectrum."
@@ -56,12 +56,12 @@ Tooltips:
 ## 4. Approach and best practice
 
 ### 4.1 Analysis
-- Third-octave bands from 20 Hz to 20 kHz (31 bands), each from a 4096-point FFT with 4x overlap, power-summed per band, after K-weighting loudness normalisation of the frame to the target's reference loudness.
+- Third-octave bands from 20 Hz to 20 kHz (31 bands), each from a 4096-point FFT with 4x overlap, power-summed per band, after K-weighting loudness normalization of the frame to the target's reference loudness.
 - Mix curve: exponential average with the Average time constant over frames above -40 LUFS short-term; Hold freezes it.
 - Display: deviation from the -4.5 dB/oct slope, smoothed across one band, ±9 dB visible; out-of-band segments (mix above the 80th or below the 20th percentile) drawn in the accent.
 
 ### 4.2 Targets
-- Built from files: drop or choose audio files (or pick from A B see's library); each file is decoded on a background thread, split into 400 ms frames, frames below -40 LUFS discarded, each kept frame loudness-normalised; per band, the 20th, 50th and 80th percentile across all frames of all files form the target. Six songs take under 20 s on an M1.
+- Built from files: drop or choose audio files (or pick from A B see's library); each file is decoded on a background thread, split into 400 ms frames, frames below -40 LUFS discarded, each kept frame loudness-normalized; per band, the 20th, 50th and 80th percentile across all frames of all files form the target. Six songs take under 20 s on an M1.
 - The Tolerance parameter re-derives the band from stored percentiles (10/20/30/50/70/80/90 are stored), so changing it is instant and needs no re-analysis.
 - Built-in targets: five genres and a plain slope, shipped as percentile tables in the plugin binary, no audio. Their provenance is stated in the manual (own and licensed material, how many songs, which years).
 - Target files are small JSON (31 bands x 7 percentiles x 3 views) in the user folder; they can be shared with friends.
@@ -70,7 +70,7 @@ Tooltips:
 - Per region (the six of the bar row), the crest factor (peak over RMS in 50 ms windows, averaged) of the mix against the same statistic of the target: too high reads "spiky, could take more compression", too low "squashed". This is what Tonal Balance Control calls Crest and what nobody else offers free.
 
 ### 4.4 Side view
-- The same as Tone, on the side signal (L-R), normalised to the mid loudness; the target stores side percentiles too. Answers "is my top end too wide" or "is there bass in the sides" without a goniometer.
+- The same as Tone, on the side signal (L-R), normalized to the mid loudness; the target stores side percentiles too. Answers "is my top end too wide" or "is there bass in the sides" without a goniometer.
 
 ### 4.5 Suggestions
 - At most two lines, the regions furthest outside the band for at least 8 s; the line names the region, how far and which side ("2.1 dB above the band around 260 Hz"), and a move in EQ Eight's terms ("try about -2 dB, Q 0.9", "try a shelf, +2 dB at 8 kHz"), rounded to what one can set. The amount is half to two-thirds of the deviation on purpose: a suggestion that lands exactly on the median makes every mix the same.
