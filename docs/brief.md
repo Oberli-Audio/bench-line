@@ -1,8 +1,8 @@
-# Sonic brief (DRAFT for owner confirmation, 2026-11-01; once confirmed, amend below, never edit the YAML)
+# Sonic brief (owner-confirmed 2026-11-01; amend below, never edit the YAML)
 
 Source: `docs/sketch.md` (decided Tier S sketch), promoted to Tier P. The three structural
-decisions are copied unchanged. Values marked `(proposal, Qn)` resolve a conflict or gap in
-the sketch and wait for the owner's answer to question n in `open_questions`.
+decisions are copied unchanged. Conflicts and gaps in the sketch were raised as Q1-Q10 and
+resolved by the owner on 2026-11-01 (all recommendations accepted); `resolved` records them.
 
 ```yaml
 name: Bench Line
@@ -46,7 +46,7 @@ success:
   - A +3 dB bump at 250 Hz shows Low-mid outside the band within 10 s; the suggestion names 250 Hz and about -2 dB.
   - Six reference files build a target in under 20 s.
   - The plugin is a bit-exact wire.
-  - Silence or a stopped transport costs nothing beyond the copy (proposal, Q5).
+  - Silence or a stopped transport costs nothing beyond the copy.
 
 references:
   - "iZotope Tonal Balance Control 2: target bands and Crest view; paid, targets from iZotope's genre curves. Bench Line is free and builds targets from the user's own references."
@@ -87,7 +87,7 @@ defining_features:        # each gets a presence test (rule 13)
   - "Side: bass added to the side channel below 120 Hz reads outside the band in Sub/Low in Side view only."
   - "Tolerance: changing it moves the band without re-analysis (no worker job started)."
 
-regions:                  # (proposal, Q6) six regions on third-octave band edges, fixed at P
+regions:                  # six regions on third-octave band edges, fixed at P
   Sub: "20-50 Hz (5 bands)"
   Low: "63-160 Hz (5)"
   Low-mid: "200-500 Hz (5)"
@@ -99,13 +99,13 @@ out_of_scope:
   - Any audio processing: no EQ, no match, no auto-gain.
   - Per-instrument targets (vocal, kick).
   - A cloud genre library; targets are files the user owns.
-  - Editable region edges at P (proposal, Q6).
+  - Editable region edges at P.
 
-core_controls:            # front panel; host parameters per parameters.csv (see Q1)
+core_controls:            # front panel; host parameters per parameters.csv (Q1)
   - "Target: list of built-in and own targets (state, not a host parameter)."
   - "View: Tone | Punch | Side (host parameter)."
   - "Average: 1-60 s, centre 10 s, 60 s reads 'Song' (host parameter)."
-  - "Hold: freezes the mix curve (host parameter in parameters.csv, state in the sketch: Q1)."
+  - "Hold: freezes the mix curve (host parameter, Q1)."
   - "Build from files: drop or choose references; progress 'Analysing 3 of 6' (state)."
   # plus Tolerance (50-90 %, non-core, host parameter) and Bypass (host bypass)
 
@@ -126,9 +126,9 @@ cpu_budget:               # rule 20, per instance, audio thread
   max_pct: 50
   at: 48k/64, slice x86_64 (Live 10.1 under Rosetta), Init
   audio_thread_expected: "copy only, well under 0.1 % of an M1 core"
-  editor_closed_total: "0.1 % on an M1 at 48 kHz / 128 (sketch); see Q5 for what runs closed"
+  editor_closed_total: "0.1 % on an M1 at 48 kHz / 128, copy plus worker while signal is above the gate (Q5)"
   editor_open_total: "under 1 % (sketch target 0.8 %) on an M1 at 48 kHz / 128, worker included"
-  idle: "silence below the gate or transport stopped: worker sleeps (proposal, Q5)"
+  idle: "silence below the gate or transport stopped: worker sleeps"
 cpu_reference_machine: Björn's M1 MacBook (Live 10.1 under Rosetta), and the Windows machine for Live on Windows
 instances_expected: "1 on the master, up to 4 on buses"
 latency_budget: 0 samples, reported 0 and verified by impulse
@@ -139,7 +139,7 @@ input_material: >
   Full mixes and masters of worship pop / rock, live recordings, buses; references are the
   songs Björn wants to sound like (WAV, AIFF, FLAC, MP3 via JUCE's formats).
 
-presets:                  # (proposal, Q7)
+presets:                  #
   bank_size: "4: Init, Song (Average 60 s), Section (Average 3 s), Low end (Punch)"
   categories: [Analyse]
   loudness_window: "n/a; a wire, every preset nulls against the input; the presetlint loudness check is a logged exception"
@@ -160,17 +160,18 @@ quality_targets:          # every target with the method that works here
   cpu:                { target: "rule 20 on the audio thread; worker < 1 % of one core editor open", method: "perf.py per-block distribution; worker time per second of audio from the harness" }
   editor:             { target: "plugin-ui-bob P evidence: snapshots 100/150/200 %, snapshot_contrast --theme bone, code checklist", method: "snapshot tool" }
 
-open_questions:
-  - "Q1 (conflict, sketch vs parameters.csv): the brief says 'only View and Average are host parameters', but the table and parameters.csv make Hold and Tolerance host parameters too (Bypass is the host's bypass either way). Recommendation: keep parameters.csv (Hold automatable is useful: freeze at the chorus), and read the brief sentence as 'only View and Average are core host parameters'."
-  - "Q2 (conflict inside decision 3): the mix gate is '-40 LUFS short-term' (3 s), the target build gates 400 ms frames at -40 LUFS without saying which loudness. Like with like needs one rule. Recommendation: both sides use 400 ms analysis frames, each frame gated on the short-term (3 s) loudness centred on it, at -40 LUFS, and normalised by its own momentary loudness."
-  - "Q3 (gap in decision 2 / Tolerance range): stored percentiles 10/20/30/50/70/80/90 give band widths 40, 60 and 80 %, but Tolerance runs 50-90 %; 50 % needs the 25th/75th and 90 % the 5th/95th. Recommendation: store 5/10/15/20/25/50/75/80/85/90/95 (11 values) and interpolate between them; the file stays small (31 x 11 x 2 views + 6 x 11 Punch)."
-  - "Q4 (definition in decision 3): -4.5 dB/oct is the usual slope on per-Hz power density; summed into third-octave bands that is -1.5 dB/oct. Recommendation: define the axis on band power as density-equivalent -4.5 dB/oct, so it reads like SPAN's 4.5 dB tilt. It only changes the drawn axis, never the in/out decision (that compares mix and target directly)."
-  - "Q5 (conflict, sketch 4.6 vs success): 'FFT only while the editor is open' and 'the mix curve is current when the window opens' cannot both hold; and success says idle 0 % while the budget says 0.1 % closed. Recommendation: the worker runs whenever the signal is above the gate, editor open or closed (that is what makes Hold, suggestions' 'since 0:42' and the curve current), sleeps in silence or with the transport stopped; the 0.1 % closed budget then covers copy plus worker, and is measured at G3."
-  - "Q6 (gap): the six regions have no edges in the sketch. Recommendation: the table above, fixed at P (edges as state can come later behind a state version)."
-  - "Q7 (P bank size): the P effect bank is 8-12 loudness-matched presets; for a wire analyser that means nothing. Recommendation: 4 presets as above and a dated exception for bank size and loudness matching."
-  - "Q8 (open in the sketch): built-in targets. Five genre targets need your reference material and their provenance (songs, years, licence). I cannot produce them here. Recommendation: release 1 ships the plain slope plus 'Mine'; genre targets are added when you hand me the reference sets (or the files' analysis JSON computed on your machine with the harness)."
+resolved:                 # owner answers 2026-11-01: all recommendations accepted
+  - "Q1 (conflict, sketch vs parameters.csv): the brief says 'only View and Average are host parameters', but the table and parameters.csv make Hold and Tolerance host parameters too (Bypass is the host's bypass either way). Resolved: keep parameters.csv (Hold automatable is useful: freeze at the chorus), and read the brief sentence as 'only View and Average are core host parameters'."
+  - "Q2 (conflict inside decision 3): the mix gate is '-40 LUFS short-term' (3 s), the target build gates 400 ms frames at -40 LUFS without saying which loudness. Like with like needs one rule. Resolved: both sides use 400 ms analysis frames, each frame gated on the short-term (3 s) loudness centred on it, at -40 LUFS, and normalised by its own momentary loudness."
+  - "Q3 (gap in decision 2 / Tolerance range): stored percentiles 10/20/30/50/70/80/90 give band widths 40, 60 and 80 %, but Tolerance runs 50-90 %; 50 % needs the 25th/75th and 90 % the 5th/95th. Resolved: store 5/10/15/20/25/50/75/80/85/90/95 (11 values) and interpolate between them; the file stays small (31 x 11 x 2 views + 6 x 11 Punch)."
+  - "Q4 (definition in decision 3): -4.5 dB/oct is the usual slope on per-Hz power density; summed into third-octave bands that is -1.5 dB/oct. Resolved: define the axis on band power as density-equivalent -4.5 dB/oct, so it reads like SPAN's 4.5 dB tilt. It only changes the drawn axis, never the in/out decision (that compares mix and target directly)."
+  - "Q5 (conflict, sketch 4.6 vs success): 'FFT only while the editor is open' and 'the mix curve is current when the window opens' cannot both hold; and success says idle 0 % while the budget says 0.1 % closed. Resolved: the worker runs whenever the signal is above the gate, editor open or closed (that is what makes Hold, suggestions' 'since 0:42' and the curve current), sleeps in silence or with the transport stopped; the 0.1 % closed budget then covers copy plus worker, and is measured at G3."
+  - "Q6 (gap): the six regions have no edges in the sketch. Resolved: the table above, fixed at P (edges as state can come later behind a state version)."
+  - "Q7 (P bank size): the P effect bank is 8-12 loudness-matched presets; for a wire analyser that means nothing. Resolved: 4 presets as above and a dated exception for bank size and loudness matching."
+  - "Q8 (open in the sketch): built-in targets. Five genre targets need your reference material and their provenance (songs, years, licence). I cannot produce them here. Resolved: release 1 ships the plain slope plus 'Mine'; genre targets are added when you hand me the reference sets (or the files' analysis JSON computed on your machine with the harness)."
   - "Q9 (G1 note, not structural): a 4096-point FFT at 48 kHz has 11.7 Hz bins, wider than the 20 Hz third-octave band (4.6 Hz) and a fixed size in samples breaks rule 12 at 96 kHz. I will choose the band analysis at G1 against that (window in seconds, a longer window or a third-octave filter bank for the low bands); the sketch's 4096 FFT is approach, not decision, so this is flagged, not changed."
-  - "Q10 (A B see): Bench Line is built first, so it defines the shared References folder layout and the per-file analysis cache format that A B see will read. OK to define it here (versioned JSON, documented in docs/)?"
+  - "Q10 (A B see): Bench Line is built first, so it defines the shared References folder layout and the per-file analysis cache format that A B see will read. Resolved: yes, versioned JSON, documented in docs/."
+open_questions: []
 ```
 
 ## Amendments
