@@ -19,7 +19,6 @@ constexpr double kNormQuantile[kPercentiles] = { -1.6448536269514729, -1.2815515
                                                  0.8416212335729143, 1.0364333894937898, 1.2815515655446004,
                                                  1.6448536269514729 };
 
-std::string format (const char* fmt, ...) __attribute__ ((format (printf, 1, 2)));
 std::string format (const char* fmt, ...)
 {
     char buf[512];

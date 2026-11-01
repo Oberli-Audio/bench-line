@@ -115,6 +115,8 @@ private:
     juce::int64 framesAnalysed = 0;
     std::vector<float> scratchL, scratchR;
     double workerTime = 0;
+    juce::int64 lastPublishedSamples = -1;
+    bool lastPublishedBypass = false;
     bool synchronous = false;
 
     mutable std::mutex snapMutex;

@@ -166,11 +166,20 @@ int Analyser::pump()
         lastHold = hold;
         targetDirty = true;
     }
-    if (frames == 0 && (targetDirty || tol != lastTolerance))
+    const bool changed = targetDirty || tol != lastTolerance;
+    if (frames == 0 && changed)
         tracker.refresh (lastNow, lastSong);   // Tolerance or target changed: edges only, no re-analysis
     lastTolerance = tol;
     targetDirty = false;
-    publish();
+    const auto seen = engine.samplesSeen();
+    const bool bypass = bypassed.load();
+    // publish when something the editor shows moved: a frame, a sub-block (the meter), a change
+    if (frames > 0 || changed || seen / 4096 != lastPublishedSamples / 4096 || bypass != lastPublishedBypass || snap.serial == 0)
+    {
+        publish();
+        lastPublishedSamples = seen;
+        lastPublishedBypass = bypass;
+    }
     workerTime += (juce::Time::getMillisecondCounterHiRes() - t0) / 1000.0;
     return frames;
 }

@@ -129,7 +129,18 @@ set(PRODUCT_SOURCES
     Source/benchline/ReferencesFolder.h
     Source/benchline/StandIns.cpp
     Source/benchline/TargetLibrary.cpp
-    Source/benchline/TargetLibrary.h)
+    Source/benchline/TargetLibrary.h
+    Source/benchline/FactoryPresets.h
+    Source/benchline/ui/BalanceView.cpp
+    Source/benchline/ui/BalanceView.h
+    Source/benchline/ui/Look.cpp
+    Source/benchline/ui/Look.h)
+
+# The factory bank in the binary (presets.csv order), for the header's preset pill
+file(GLOB PRODUCT_PRESET_FILES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/presets/*.oberlipreset")
+juce_add_binary_data(BenchLinePresets HEADER_NAME BenchLinePresets.h NAMESPACE BenchLinePresets
+    SOURCES presets.csv ${PRODUCT_PRESET_FILES})
+set_target_properties(BenchLinePresets PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 target_sources(BenchLine PRIVATE ${PRODUCT_SOURCES})
 target_include_directories(BenchLine PRIVATE Source "${CMAKE_CURRENT_BINARY_DIR}/generated")
@@ -145,6 +156,7 @@ target_compile_definitions(BenchLine
         PRODUCT_IS_INSTRUMENT=$<IF:$<BOOL:${PRODUCT_IS_SYNTH}>,1,0>)
 target_link_libraries(BenchLine
     PRIVATE
+        BenchLinePresets
         juce::juce_audio_utils
         juce::juce_dsp
     PUBLIC
@@ -209,6 +221,7 @@ target_compile_definitions(BenchLineHarness PRIVATE
 # portable; Horizon Pad links the SharedCode library instead, which saves a compile).
 target_sources(BenchLineHarness PRIVATE ${PRODUCT_SOURCES})
 target_link_libraries(BenchLineHarness PRIVATE
+    BenchLinePresets
     juce::juce_audio_utils juce::juce_dsp juce::juce_audio_formats
     juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)
 if (PRODUCT_ASAN)
@@ -233,6 +246,18 @@ if (PRODUCT_RTSAN)
     target_link_options(BenchLineHarness PRIVATE -fsanitize=realtime)
     target_compile_definitions(BenchLineHarness PRIVATE PRODUCT_RTSAN=1)
 endif()
+
+# BenchLineGuiSnapshot: the editor rendered offscreen to PNG (plugin-ui-bob audio-plugins.md 15).
+juce_add_console_app(BenchLineGuiSnapshot PRODUCT_NAME "BenchLineGuiSnapshot")
+target_sources(BenchLineGuiSnapshot PRIVATE tools/gui_snapshot/Main.cpp ${PRODUCT_SOURCES})
+target_include_directories(BenchLineGuiSnapshot PRIVATE Source "${CMAKE_CURRENT_BINARY_DIR}/generated")
+target_compile_definitions(BenchLineGuiSnapshot PRIVATE
+    JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_DISPLAY_SPLASH_SCREEN=0 JUCE_REPORT_APP_USAGE=0
+    JUCE_STRICT_REFCOUNTEDPOINTER=1 JUCE_STANDALONE_APPLICATION=1 JUCE_USE_MP3AUDIOFORMAT=1
+    "JucePlugin_Name=\"Bench Line\"" "JucePlugin_VersionString=\"${PRODUCT_VERSION}\"")
+target_link_libraries(BenchLineGuiSnapshot PRIVATE BenchLinePresets
+    juce::juce_audio_utils juce::juce_dsp juce::juce_audio_formats
+    juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)
 
 # ---------------------------------------------------------------------------
 # Tests (G3 and G6): the suite drives the real DSP through the harness (tools/tests/test_plugin.py,
@@ -265,7 +290,7 @@ if (Python3_FOUND)
         set_tests_properties(parameter_table PROPERTIES LABELS "fast;lint")
         add_test(NAME preset_bank
                  COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/scripts/dsp-kit/presetlint.py" bank
-                         "${CMAKE_CURRENT_SOURCE_DIR}/presets.csv" --tier S --track ${PRODUCT_KIND} --harness "$<TARGET_FILE:BenchLineHarness>"
+                         "${CMAKE_CURRENT_SOURCE_DIR}/presets.csv" --tier S --track ${PRODUCT_KIND} --categories Analyse --harness "$<TARGET_FILE:BenchLineHarness>"
                  WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
         set_tests_properties(preset_bank PROPERTIES ENVIRONMENT "${HARNESS_ENV}" LABELS "fast;lint")
     else()

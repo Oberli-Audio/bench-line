@@ -6,7 +6,7 @@ name: Build
 
 on:
   push:
-    branches: [main]
+    branches: [main, "claude/**"]
     tags: ["v*"]
   pull_request:
     branches: [main]
@@ -63,6 +63,25 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with: { name: "validation-logs-${{ matrix.name }}", path: validation-logs }
+
+      # ---- test bundles on every non-tag push: what Björn loads for the host checks ----
+      - name: Test bundle, ad-hoc signed (macOS)
+        if: runner.os == 'macOS' && !startsWith(github.ref, 'refs/tags/v')
+        run: |
+          cd build/BenchLine_artefacts/Release
+          rm -rf test-bundle && mkdir -p test-bundle
+          xattr -cr "VST3/Bench Line.vst3"
+          codesign --force --sign - "VST3/Bench Line.vst3"
+          lipo -archs "VST3/Bench Line.vst3/Contents/MacOS/"*
+          cp -R "VST3/Bench Line.vst3" test-bundle/
+      - name: Upload test bundle (macOS)
+        if: runner.os == 'macOS' && !startsWith(github.ref, 'refs/tags/v')
+        uses: actions/upload-artifact@v4
+        with: { name: "BenchLine-test-macOS", path: "build/BenchLine_artefacts/Release/test-bundle" }
+      - name: Upload test bundle (Windows)
+        if: runner.os == 'Windows' && !startsWith(github.ref, 'refs/tags/v')
+        uses: actions/upload-artifact@v4
+        with: { name: "BenchLine-test-Windows", path: "build/BenchLine_artefacts/Release/VST3" }
 
       # ---- release assets on a tag (ship-bob release-recipe.md step 3) ----
       - name: Sign ad-hoc, stage, zip, symbols, provenance (macOS)

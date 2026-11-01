@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<OberliPreset name="Section" author="Oberli Audio" category="Analyse"
+              description="Follows a section (3 s): verse against chorus."
+              pluginVersion="0.1.0" created="2026-11-01" factory="true">
+  <BenchLineState version="1" dspVersion="1">
+    <PARAMETERS>
+      <PARAM id="view" value="0"/>
+      <PARAM id="average" value="3"/>
+      <PARAM id="hold" value="0"/>
+      <PARAM id="tolerance" value="60"/>
+      <PARAM id="bypass" value="0"/>
+    </PARAMETERS>
+    <Extra/>
+  </BenchLineState>
+</OberliPreset>

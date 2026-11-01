@@ -1,2 +1,5 @@
 slug,name,category,tags,edge,author,notes
-init,Init,Bed,,N,Oberli Audio,the parameter table's defaults (category: the brief's list; Bed until G0 decides)
+init,Init,Analyse,,N,Oberli Audio,the parameter table's defaults: Tone view; Average 10 s
+song,Song,Analyse,master,N,Oberli Audio,Average 60 s: the whole song on the master
+section,Section,Analyse,,N,Oberli Audio,Average 3 s: follows a verse or a chorus
+low-end,Low end,Analyse,punch,N,Oberli Audio,Punch view: crest per region against the target

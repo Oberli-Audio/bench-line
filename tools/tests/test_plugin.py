@@ -28,7 +28,7 @@ GOLDEN_DIR = Path(os.environ.get("GOLDEN_DIR", "tools/tests/golden"))   # commit
 GOLDEN_ARCH = os.environ.get("GOLDEN_ARCH", "x86_64")                # D.2.1: the slice the host runs
 DEFAULT = dict(seed=1, sample_rate=48000, block=512, seconds=2.0)
 SOURCE = dict(signal="impulse")
-PARAM = ("outGain", 0.25)            # one real parameter ID and a non-default value
+PARAM = ("average", 0.25)            # one real parameter ID and a non-default value
 RATES = (44100, 48000, 88200, 96000, 176400, 192000)
 BLOCKS = (0, 1, 13, 32, 64, 512, 4096)
 INSTRUMENT = "notes" in SOURCE
@@ -80,11 +80,11 @@ class Contract(Timed):
 class RateAndBlock(Timed):
     def test_rate_block_matrix_is_clean(self):                             # DoD: 42 combinations
         for fs in RATES:
-            for blk in BLOCKS:
+            for blk in [b for b in BLOCKS if b > 0]:                       # 0-length blocks: random:<seed> (the contract)
                 with self.subTest(fs=fs, block=blk):
                     res = run(sample_rate=fs, block=blk, seconds=0.25)
                     self.assertEqual(res["health"]["nan"] + res["health"]["inf"], 0)
-                    self.assertLess(res["levels"]["peak_dbfs"], 0.0)
+                    self.assertLessEqual(res["levels"]["peak_dbfs"], 0.0)   # a wire: the 0 dBFS impulse comes out as it went in
 
     def test_random_block_sizes_from_zero(self):                           # D.5.1, fuzz
         res = run(block="random:7", max_block=1024, seconds=0.5)
@@ -195,13 +195,224 @@ class Goldens(Timed):
                                 "%s: residual against the golden (%s) - regenerate only with a changelog line (D.3.5)" % (sc.stem, kind))
 
 
+# ---------------------------------------------------------------------------------------------
+# Bench Line: the wire and the defining features (brief.md, rule 13). Test signals come from the
+# G2 model ("sound design/model/benchline_model.py"), so the port is tested on the model's inputs.
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "sound design" / "model"))
+import numpy as np  # noqa: E402
+import benchline_model as BM  # noqa: E402
+
+_REFS = tempfile.mkdtemp(prefix="benchline-refs-")
+os.environ["BENCHLINE_REFERENCES"] = _REFS        # never the user's folder
+
+
+def wav(path, x, fs):
+    K.write_wav(str(path), np.asarray(x, dtype=np.float32), fs)
+    return str(path)
+
+
+def bench(params=None, **flags):
+    """A render on an input file with the product flags; no contract echo of the file flags."""
+    f = dict(seed=1, block=512)
+    f.update(flags)
+    return K.render(HARNESS, params, **f)
+
+
+_PINK_TARGET = {}
+
+
+def pink_target(fs=48000):
+    """Six pink-noise 'reference songs' (30 s each) built into a target by the plugin."""
+    if fs not in _PINK_TARGET:
+        d = Path(tempfile.mkdtemp(prefix="benchline-t-"))
+        files = [wav(d / ("ref%d.wav" % i), BM.set_lufs(BM.stereo_pink(30.0, fs, seed=100 + i), fs, -14.0), fs) for i in range(6)]
+        out = d / "pink.json"
+        res = bench(sample_rate=fs, seconds=0.2, signal="silence", build_target=",".join(files), target_name="Pink", target_out=out)
+        assert res["product"]["build"]["ok"], res["product"]["build"]
+        _PINK_TARGET[fs] = (str(out), res["product"]["build"])
+    return _PINK_TARGET[fs][0]
+
+
+class Wire(Timed):
+    """Structural decision 1: the output is the input, bit for bit, in every state."""
+
+    def test_output_is_bit_identical_in_every_state(self):
+        states = [{}, {"view": 0.5}, {"view": 1.0}, {"hold": 1.0}, {"tolerance": 1.0}, {"average": 1.0}, {"bypass": 1.0}]
+        with tempfile.TemporaryDirectory() as d:
+            for fs in RATES:
+                x = BM.stereo_pink(0.6, fs, seed=fs) * 0.3
+                x[: fs // 10] = 0.0
+                src = wav(Path(d) / ("in%d.wav" % fs), x, fs)
+                ref, _ = K.read_wav(src)
+                for i, st in enumerate(states):
+                    blk = ("random:%d" % (fs + i)) if i % 2 else [b for b in BLOCKS if b > 1][(i + fs) % (len(BLOCKS) - 2)]
+                    with self.subTest(fs=fs, state=st, block=blk):
+                        out = Path(d) / "out.wav"
+                        bench(st, sample_rate=fs, block=blk, max_block=4096, seconds=0.6, target="slope", out=out, **{"in": src})
+                        y, _ = K.read_wav(out)
+                        self.assertTrue(np.array_equal(y[: len(ref)], ref), "output differs from the input")
+
+    def test_latency_is_zero(self):                                        # rule 7
+        res = bench(signal="impulse", seconds=0.1)
+        self.assertEqual(res["applied"]["latency_samples"], 0)
+
+    def test_malloc_trap_is_live(self):                                    # rule 1: the trap itself
+        import subprocess
+        r = subprocess.run([HARNESS, "--seconds=0.05"], env=dict(os.environ, PRODUCT_MALLOC_TRAP_SELFTEST="1"), capture_output=True, text=True)
+        if sys.platform.startswith("linux") or sys.platform == "darwin":
+            self.assertNotEqual(r.returncode, 0, "the self-test allocation did not abort: the trap is not armed")
+            self.assertIn("malloc trap", r.stderr)
+
+
 class DefiningFeatures(Timed):
-    """Rule 13: one presence test per defining feature in the brief. Show each failing
-    on a build without the feature (D.3.8) before trusting it."""
+    """Rule 13: one presence test per defining feature in brief.md. Each was shown failing on an
+    input without the feature (docs/status.md, G3 lines)."""
     label = "render"
 
-    def test_feature_present(self):                                        # TODO
-        self.skipTest("write one test per defining feature in brief.md")
+    def _mix(self, d, fs=48000, bump=3.0, lufs=-14.0, seconds=20.0, name="mix.wav"):
+        x = BM.stereo_pink(seconds, fs, seed=7)
+        if bump:
+            x = BM.peaking(x, fs, 250.0, bump, 1.0)
+        return wav(Path(d) / name, BM.set_lufs(x, fs, lufs), fs)
+
+    def test_detection_flat_mix_reads_inside(self):
+        with tempfile.TemporaryDirectory() as d:
+            res = bench(seconds=20.0, target=pink_target(), **{"in": self._mix(d, bump=0.0)})
+            self.assertEqual([r["verdict"] for r in res["product"]["views"]["tone"]["regions"]], ["inside"] * 6)
+
+    def test_detection_250hz_bump_reads_lowmid_outside_within_10s(self):
+        with tempfile.TemporaryDirectory() as d:
+            res = bench(seconds=20.0, target=pink_target(), **{"in": self._mix(d)})
+            first = res["product"]["first_outside_s"].get("tone/Low-mid/above")
+            self.assertIsNotNone(first, "Low-mid never read above the band")
+            self.assertLessEqual(first, 10.0)
+            self.assertEqual(res["product"]["views"]["tone"]["regions"][2]["verdict"], "above")
+
+    def test_suggestion_names_250hz_and_about_minus_2db(self):
+        with tempfile.TemporaryDirectory() as d:
+            res = bench(seconds=20.0, target=pink_target(), **{"in": self._mix(d)})
+            s = res["product"]["views"]["tone"].get("first_suggestion")
+            self.assertIsNotNone(s, "no suggestion")
+            self.assertEqual(s["region"], "Low-mid")
+            self.assertTrue(250 / 2 ** (1 / 3) - 1 <= s["hz"] <= 250 * 2 ** (1 / 3) + 1, s)
+            self.assertTrue(-2.5 <= s["gain_db"] <= -1.5, s)
+
+    def test_loudness_independence(self):
+        with tempfile.TemporaryDirectory() as d:
+            a = bench(seconds=15.0, target=pink_target(), **{"in": self._mix(d, lufs=-8.0, seconds=15.0, name="a.wav")})
+            b = bench(seconds=15.0, target=pink_target(), **{"in": self._mix(d, lufs=-16.0, seconds=15.0, name="b.wav")})
+            ma = np.array(a["product"]["views"]["tone"]["median"], dtype=float)
+            mb = np.array(b["product"]["views"]["tone"]["median"], dtype=float)
+            self.assertLessEqual(float(np.max(np.abs(ma - mb))), 0.2)
+
+    def test_gate_quiet_tail_does_not_move_the_curve(self):
+        from scipy import signal as sg
+        fs = 48000
+        with tempfile.TemporaryDirectory() as d:
+            mix = BM.set_lufs(BM.stereo_pink(15.0, fs, seed=7), fs, -14.0)
+            q = sg.sosfilt(sg.butter(4, 500, fs=fs, output="sos"), BM.stereo_pink(10.0, fs, seed=9), axis=0)
+            a = bench(seconds=25.0, target=pink_target(), **{"in": wav(Path(d) / "a.wav", np.concatenate([mix, np.zeros((10 * fs, 2))]), fs)})
+            b = bench(seconds=25.0, target=pink_target(), **{"in": wav(Path(d) / "b.wav", np.concatenate([mix, BM.set_lufs(q, fs, -60.0)]), fs)})
+            ma = np.array(a["product"]["views"]["tone"]["median"], dtype=float)
+            mb = np.array(b["product"]["views"]["tone"]["median"], dtype=float)
+            self.assertLess(float(np.max(np.abs(ma - mb))), 0.1)
+
+    def test_punch_compressed_mix_reads_squashed(self):
+        fs = 48000
+        with tempfile.TemporaryDirectory() as d:
+            # the references: pink noise with a 4 Hz amplitude pulse (punchy); the mix: plain pink (flat envelope)
+            t = np.arange(20 * fs) / fs
+            env = (0.25 + np.maximum(0, np.sin(2 * np.pi * 2 * t)) ** 8)[:, None]
+            refs = [wav(Path(d) / ("p%d.wav" % i), BM.set_lufs(BM.stereo_pink(20.0, fs, seed=200 + i) * env, fs, -14.0), fs) for i in range(3)]
+            mix = self._mix(d, bump=0.0, seconds=15.0)
+            res = bench(seconds=15.0, build_target=",".join(refs), target_name="Punchy", target_out=Path(d) / "p.json", **{"in": mix})
+            verdicts = [r["verdict"] for r in res["product"]["views"]["punch"]["regions"]]
+            self.assertIn("below", verdicts, verdicts)
+            self.assertNotIn("above", verdicts, verdicts)
+
+    def test_side_bass_moved_to_the_side_reads_outside_in_side_view_only(self):
+        """The references carry their bass in the mid; the mix has the same bass in the side.
+        Per-channel power is unchanged (L^2 + R^2 = 2 (M^2 + S^2)), so Tone stays inside and only
+        Side reads Sub/Low above (brief amendment 2026-11-01)."""
+        from scipy import signal as sg
+        fs = 48000
+        lp = sg.butter(4, 120, fs=fs, output="sos")
+        def song(seed, side_bass, seconds=15.0):
+            x = BM.stereo_pink(seconds, fs, seed=seed)
+            b = 2.0 * sg.sosfilt(lp, BM.pink(int(seconds * fs), np.random.default_rng(seed + 1)))
+            y = x.copy()
+            y[:, 0] += b
+            y[:, 1] += -b if side_bass else b
+            return BM.set_lufs(y, fs, -14.0)
+        with tempfile.TemporaryDirectory() as d:
+            refs = [wav(Path(d) / ("r%d.wav" % i), song(400 + i, False), fs) for i in range(3)]
+            res = bench(seconds=15.0, build_target=",".join(refs), target_name="MidBass", target_out=Path(d) / "m.json",
+                        **{"in": wav(Path(d) / "s.wav", song(7, True), fs)})
+            side = [r["verdict"] for r in res["product"]["views"]["side"]["regions"]]
+            tone = [r["verdict"] for r in res["product"]["views"]["tone"]["regions"]]
+            self.assertTrue(side[0] == "above" or side[1] == "above", side)
+            self.assertEqual(tone[:2], ["inside", "inside"], tone)
+
+    def test_tolerance_moves_the_band_not_the_curve(self):
+        with tempfile.TemporaryDirectory() as d:
+            mix = self._mix(d, bump=1.5, seconds=12.0)
+            narrow = bench({"tolerance": 0.0}, seconds=12.0, target=pink_target(), **{"in": mix})
+            wide = bench({"tolerance": 1.0}, seconds=12.0, target=pink_target(), **{"in": mix})
+            pn, pw = narrow["product"], wide["product"]
+            self.assertEqual(pn["views"]["tone"]["median"], pw["views"]["tone"]["median"])
+            self.assertEqual(pn["frames_analysed"], pw["frames_analysed"])
+            wn = np.array(pn["views"]["tone"]["hi"]) - np.array(pn["views"]["tone"]["lo"])
+            ww = np.array(pw["views"]["tone"]["hi"]) - np.array(pw["views"]["tone"]["lo"])
+            self.assertTrue(np.all(ww > wn))
+
+    def test_plain_slope_reads_slope_noise_inside(self):
+        fs = 48000
+        rng = np.random.default_rng(21)
+        n = 15 * fs
+        X = np.fft.rfft(rng.standard_normal(n)); f = np.fft.rfftfreq(n, 1 / fs); f[0] = 1; X /= f ** 0.75; X[0] = 0
+        y = np.fft.irfft(X, n); y /= np.std(y) * 8
+        with tempfile.TemporaryDirectory() as d:
+            res = bench(seconds=15.0, target="slope", **{"in": wav(Path(d) / "s.wav", np.stack([y, y], 1), fs)})
+            self.assertEqual([r["verdict"] for r in res["product"]["views"]["tone"]["regions"]], ["inside"] * 6)
+
+    def test_hold_survives_the_session(self):
+        with tempfile.TemporaryDirectory() as d:
+            mix = self._mix(d, bump=0.0, seconds=6.0)
+            a = bench({"hold": 1.0}, seconds=6.0, target=pink_target(), state_out=Path(d) / "s.state", **{"in": mix})
+            b = bench(seconds=0.5, state_in=Path(d) / "s.state", signal="silence")
+            self.assertTrue(b["product"]["hold"]["active"])
+            self.assertEqual(b["product"]["target"], "Pink")
+
+
+class Standards(Timed):
+    label = "render"
+
+    def test_ebu3341_short_term_at_every_rate(self):                       # rule 17
+        with tempfile.TemporaryDirectory() as d:
+            for fs in RATES:
+                t = np.arange(int(9 * fs)) / fs
+                for name, amp, want in (("c1", np.full_like(t, 10 ** (-23 / 20)), -23.0), ("c2", np.full_like(t, 10 ** (-33 / 20)), -33.0),
+                                        ("c9", np.where(np.mod(t, 3.0) < 1.34, 10 ** (-20 / 20), 10 ** (-30 / 20)), -23.0)):
+                    s = amp * np.sin(2 * np.pi * 1000 * t)
+                    res = bench(sample_rate=fs, seconds=9.0, **{"in": wav(Path(d) / "e.wav", np.stack([s, s], 1), fs)})
+                    with self.subTest(fs=fs, case=name):
+                        self.assertLess(abs(res["product"]["short_term_lufs"] - want), 0.1)
+
+    def test_build_speed_and_reload(self):
+        fs = 44100
+        with tempfile.TemporaryDirectory() as d:
+            files = [wav(Path(d) / ("song%d.wav" % i), BM.set_lufs(BM.stereo_pink(60.0, fs, seed=300 + i), fs, -12.0), fs) for i in range(6)]
+            res = bench(sample_rate=fs, seconds=0.2, signal="silence", build_target=",".join(files), target_out=Path(d) / "t.json", no_cache=1)
+            b = res["product"]["build"]
+            speed = 360.0 / b["seconds"]                                        # seconds of audio per second
+            print(" build: 6 x 60 s in %.2f s = %.0fx realtime (24 min in 20 s needs 72x)" % (b["seconds"], speed), end="")
+            self.assertGreater(speed, 72.0)
+            # the written file reloads identically: building again from the cache gives the same bytes
+            first = (Path(d) / "t.json").read_bytes()
+            bench(sample_rate=fs, seconds=0.2, signal="silence", build_target=",".join(files), target_out=Path(d) / "t2.json")
+            bench(sample_rate=fs, seconds=0.2, signal="silence", build_target=",".join(files), target_out=Path(d) / "t3.json")
+            self.assertEqual((Path(d) / "t2.json").read_bytes(), (Path(d) / "t3.json").read_bytes(), "cached build differs")
+            self.assertEqual(first, (Path(d) / "t2.json").read_bytes(), "fresh and cached builds differ")
 
 
 # CTest registration (CMakeLists.txt of the project):
@@ -220,7 +431,7 @@ if __name__ == "__main__":
     if label:
         loader = unittest.TestLoader()
         suite = unittest.TestSuite()
-        for cls in (Contract, RateAndBlock, Health, Properties, Goldens, DefiningFeatures):
+        for cls in (Contract, RateAndBlock, Health, Properties, Wire, Goldens, DefiningFeatures, Standards):
             if cls.label == label:
                 suite.addTests(loader.loadTestsFromTestCase(cls))
         t0 = time.time()

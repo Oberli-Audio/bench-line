@@ -175,4 +175,7 @@ open_questions: []
 ```
 
 ## Amendments
-- (none yet)
+- 2026-11-01: **Accent peacock #039BE5** (category accent for analysis and monitoring, CLAUDE.md from main); replaces `accent: lime` above. Re-opens nothing on the sound side; the editor is built with peacock.
+- 2026-11-01: **Gate refined** (Q2): a frame counts when the short-term loudness centred on it AND its own 400 ms loudness are >= -40 LUFS, on both sides (mix and target, like with like). Why: with the centred window alone, up to 1.5 s of a quiet passage after a loud one passed the gate and moved the curve by 0.44 dB (G2, `g2_check.py`, gate_shift); with the refinement 0.0 dB.
+- 2026-11-01: **Side feature wording**: "bass *moved* from the mid to the side reads Sub/Low above in Side view, while Tone stays inside". Tone measures per-channel power ((L^2+R^2)/2 = M^2+S^2, G1 decision 2), so bass *added* to the side also adds bass to Tone, correctly. Test `test_side_bass_moved_to_the_side_reads_outside_in_side_view_only`.
+- 2026-11-01: **Suggestion amount** two-thirds of the deviation from the median (inside the sketch's "half to two-thirds"), so the +3 dB at 250 Hz case reads -2.0 dB rather than the edge of the 1.5-2.5 range.
