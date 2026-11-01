@@ -113,13 +113,75 @@ void operator delete (void* p, size_t) noexcept        { std::free (p); }
 void operator delete[] (void* p, size_t) noexcept      { std::free (p); }
 #endif
 
+// Linux (glibc): the same trap forwarding to glibc's internal entry points; not under ASan/TSan,
+// whose runtimes own malloc. Lets the cloud and CI machines run rule 1's check too.
+#if defined(__SANITIZE_ADDRESS__) || defined(__SANITIZE_THREAD__)
+ #define PRODUCT_SANITIZED 1
+#elif defined(__has_feature)
+ #if __has_feature(address_sanitizer) || __has_feature(thread_sanitizer)
+  #define PRODUCT_SANITIZED 1
+ #endif
+#endif
+#ifndef PRODUCT_SANITIZED
+ #define PRODUCT_SANITIZED 0
+#endif
+#if JUCE_LINUX && ! PRODUCT_HAS_RTSAN && ! PRODUCT_SANITIZED
+ #define PRODUCT_LINUX_TRAP 1
+ #include <pthread.h>
+ #include <unistd.h>
+ #include <cerrno>
+extern "C" void* __libc_malloc (size_t);
+extern "C" void* __libc_calloc (size_t, size_t);
+extern "C" void* __libc_realloc (void*, size_t);
+extern "C" void* __libc_memalign (size_t, size_t);
+namespace mallocTrap
+{
+    static std::atomic<bool> armed { false };
+    static pthread_t owner;
+    [[noreturn]] static void trip (const char* what) noexcept
+    {
+        armed.store (false);
+        static const char prefix[] = "malloc trap: ";
+        static const char suffix[] = " inside processBlock (rule 1: no allocation on the audio thread)\n";
+        (void) ! ::write (2, prefix, sizeof (prefix) - 1);
+        (void) ! ::write (2, what, std::strlen (what));
+        (void) ! ::write (2, suffix, sizeof (suffix) - 1);
+        std::abort();
+    }
+    static inline void check (const char* what) noexcept
+    {
+        if (armed.load (std::memory_order_relaxed) && pthread_equal (pthread_self(), owner))
+            trip (what);
+    }
+    static bool enabled() { const char* v = std::getenv ("PRODUCT_MALLOC_TRAP"); return v == nullptr || std::strcmp (v, "0") != 0; }
+    static const bool selfTest = std::getenv ("PRODUCT_MALLOC_TRAP_SELFTEST") != nullptr;
+    static void* volatile selfTestSink = nullptr;
+}
+extern "C"
+{
+    void* malloc (size_t n)            { mallocTrap::check ("malloc");  return __libc_malloc (n); }
+    void* calloc (size_t c, size_t n)  { mallocTrap::check ("calloc");  return __libc_calloc (c, n); }
+    void* realloc (void* p, size_t n)  { mallocTrap::check ("realloc"); return __libc_realloc (p, n); }
+    void* memalign (size_t a, size_t n) { mallocTrap::check ("memalign"); return __libc_memalign (a, n); }
+    void* aligned_alloc (size_t a, size_t n) { mallocTrap::check ("aligned_alloc"); return __libc_memalign (a, n); }
+    int posix_memalign (void** out, size_t alignment, size_t n)
+    {
+        mallocTrap::check ("posix_memalign");
+        *out = __libc_memalign (alignment, n);
+        return *out != nullptr ? 0 : ENOMEM;
+    }
+}
+#else
+ #define PRODUCT_LINUX_TRAP 0
+#endif
+
 static void processBlockRealtime (juce::AudioProcessor& processor, juce::AudioBuffer<float>& block, juce::MidiBuffer& midi) PRODUCT_NONBLOCKING
 {
    #if PRODUCT_HAS_RTSAN
     if (rtsanSelfTest)
         rtsanSelfTestAllocation();
    #endif
-   #if JUCE_MAC && ! PRODUCT_HAS_RTSAN
+   #if (JUCE_MAC && ! PRODUCT_HAS_RTSAN) || PRODUCT_LINUX_TRAP
     static const bool trapOn = mallocTrap::enabled();
     if (trapOn)
     {
@@ -160,7 +222,13 @@ const char* const kUsage =
     "  --preset-at=<t>:<slug>       load a factory preset at t seconds; repeatable\n"
     "  --profile --warmup=<n>       time every processBlock; exclude n blocks from the distribution\n"
     "  --solo=<part>                product-specific isolation (see the hooks at the end of Main.cpp)\n"
-    "  --list-params | --list-presets   JSON lists; exit\n";
+    "  --list-params | --list-presets   JSON lists; exit\n"
+    "Bench Line (product flags):\n"
+    "  --target=<file.json>|slope   compare against a target file or the built-in plain slope\n"
+    "  --build-target=<a,b,...>     build a target from audio files first (then it is the target);\n"
+    "                               --target-name=<name> --target-out=<file.json> --no-cache\n"
+    "  --dump-frames=<file.json>    every analysis frame (gated, tone, side, punch, short-term)\n"
+    "  BENCHLINE_REFERENCES=<dir>   the reference folder (targets, analysis cache)\n";
 
 struct Args
 {
@@ -184,7 +252,8 @@ Args parseArgs (int argc, char* argv[])
 {
     static const juce::StringArray known { "help", "seed", "sample-rate", "block", "max-block", "seconds", "preset", "param",
         "automate", "bend", "mod", "notes", "midi", "gate", "reprepare-at", "in", "signal", "out", "state-in", "state-out",
-        "profile", "preset-at", "warmup", "solo", "list-params", "list-presets" };
+        "profile", "preset-at", "warmup", "solo", "list-params", "list-presets",
+        "target", "build-target", "target-name", "target-out", "dump-frames", "no-cache" };
     Args a;
     for (int i = 1; i < argc; ++i)
     {
@@ -446,9 +515,126 @@ static bool applySolo (juce::AudioProcessor&, const juce::String& part)
     return false;   // unknown part: refused with exit 2
 }
 
-static juce::var productMetrics (const juce::AudioBuffer<float>&, double)
+// Bench Line: the analysis runs synchronously after every block (outside the profile), so a
+// render is deterministic; the product object reports what the editor would show at the end,
+// the timeline of verdicts and suggestions, the worker's CPU and the target build.
+struct ProductRun
 {
-    return obj();
+    BenchLineAudioProcessor* proc = nullptr;
+    double workerSeconds = 0;
+    juce::var build;
+    juce::Array<juce::var> frames;
+    bool dump = false;
+    std::map<juce::String, double> firstOutside;     // "<view>/<region>/<verdict>" -> engine seconds
+    std::map<juce::String, juce::var> firstSuggestion;  // "<view>" -> {t, text, ...}
+};
+static ProductRun productRun;
+
+static const char* viewName (int v) { return v == benchline::dsp::kTone ? "tone" : (v == benchline::dsp::kSide ? "side" : "punch"); }
+static const char* verdictName (benchline::dsp::Verdict v)
+{
+    switch (v) { case benchline::dsp::Verdict::inside: return "inside"; case benchline::dsp::Verdict::above: return "above";
+                 case benchline::dsp::Verdict::below: return "below"; default: return "none"; }
+}
+static juce::var numberOrNull (double v) { return std::isfinite (v) ? juce::var (v) : juce::var(); }
+
+static void observeFrame (const benchline::dsp::Frame& f, const benchline::dsp::Tracker& tr)
+{
+    if (productRun.dump)
+    {
+        auto o = obj();
+        set (o, "j", (juce::int64) f.j); set (o, "ready_s", f.readySeconds); set (o, "gated", f.gated); set (o, "short_term", numberOrNull (f.shortTerm));
+        if (f.gated)
+        {
+            juce::Array<juce::var> tone, side, punch;
+            for (double v : f.tone) tone.add (v);
+            for (double v : f.side) side.add (v);
+            for (double v : f.punch) punch.add (v);
+            set (o, "tone", tone); set (o, "side", side); set (o, "punch", punch);
+        }
+        productRun.frames.add (o);
+    }
+    for (int v = 0; v < 3; ++v)
+    {
+        const auto& st = tr.view (v);
+        for (int r = 0; r < benchline::dsp::kRegions; ++r)
+            if (st.verdict[(size_t) r] == benchline::dsp::Verdict::above || st.verdict[(size_t) r] == benchline::dsp::Verdict::below)
+            {
+                const auto key = juce::String (viewName (v)) + "/" + benchline::dsp::kRegionNames[r] + "/" + verdictName (st.verdict[(size_t) r]);
+                if (productRun.firstOutside.count (key) == 0) productRun.firstOutside[key] = f.readySeconds;
+            }
+        if (st.numSuggestions > 0 && productRun.firstSuggestion.count (viewName (v)) == 0)
+        {
+            const auto& s = st.suggestions[0];
+            auto o = obj();
+            set (o, "t", f.readySeconds); set (o, "region", benchline::dsp::kRegionNames[s.region]); set (o, "hz", s.hz);
+            set (o, "gain_db", s.gainDb); set (o, "q", s.q); set (o, "text", juce::String (s.text));
+            productRun.firstSuggestion[viewName (v)] = o;
+        }
+    }
+}
+
+static juce::var productMetrics (const juce::AudioBuffer<float>& out, double rate)
+{
+    auto root = obj();
+    if (productRun.proc == nullptr) return root;
+    const auto snap = productRun.proc->analyser().snapshot();
+    set (root, "target", snap.targetName[0] != 0 ? juce::var (juce::String (snap.targetName)) : juce::var());
+    set (root, "frames_analysed", (juce::int64) snap.framesAnalysed);
+    set (root, "frames_gated", (juce::int64) snap.gatedFrames);
+    set (root, "short_term_lufs", numberOrNull (snap.shortTermLufs));
+    set (root, "silent", snap.silent);
+    set (root, "bypassed", snap.bypassed);
+    set (root, "overflow_samples", (juce::int64) snap.overflowSamples);
+    const double audioSeconds = (double) out.getNumSamples() / rate;
+    set (root, "worker_cpu_pct", audioSeconds > 0 ? 100.0 * productRun.workerSeconds / audioSeconds : 0.0);
+    auto views = obj();
+    for (int v = 0; v < 3; ++v)
+    {
+        const auto& sv = snap.views[(size_t) v];
+        auto o = obj();
+        juce::Array<juce::var> med, lo, mid, hi, regions, sugg;
+        for (int i = 0; i < sv.count; ++i)
+        {
+            med.add (numberOrNull (sv.median[(size_t) i]));
+            if (sv.hasTarget) { lo.add (sv.lo[(size_t) i]); mid.add (sv.mid[(size_t) i]); hi.add (sv.hi[(size_t) i]); }
+        }
+        for (int r = 0; r < benchline::dsp::kRegions; ++r)
+        {
+            auto rr = obj();
+            set (rr, "region", benchline::dsp::kRegionNames[r]); set (rr, "verdict", verdictName (sv.verdict[(size_t) r])); set (rr, "dev_db", sv.devDb[(size_t) r]);
+            regions.add (rr);
+        }
+        for (int i = 0; i < sv.numSugg; ++i)
+        {
+            const auto& s = sv.sugg[(size_t) i];
+            auto so = obj();
+            set (so, "region", benchline::dsp::kRegionNames[s.region]); set (so, "hz", s.hz); set (so, "gain_db", s.gainDb); set (so, "q", s.q);
+            set (so, "since_s", s.sinceSeconds); set (so, "since_song", s.sinceSong); set (so, "text", juce::String (s.text));
+            sugg.add (so);
+        }
+        set (o, "median", med);
+        if (sv.hasTarget) { set (o, "lo", lo); set (o, "mid", mid); set (o, "hi", hi); }
+        set (o, "regions", regions);
+        set (o, "suggestions", sugg);
+        if (productRun.firstSuggestion.count (viewName (v)) > 0) set (o, "first_suggestion", productRun.firstSuggestion[viewName (v)]);
+        set (views, viewName (v), o);
+    }
+    set (root, "views", views);
+    auto first = obj();
+    for (auto& kv : productRun.firstOutside) set (first, kv.first.toRawUTF8(), kv.second);
+    set (root, "first_outside_s", first);
+    auto hold = obj();
+    set (hold, "active", snap.holdActive);
+    if (snap.holdActive)
+    {
+        juce::Array<juce::var> h;
+        for (double v : snap.held[benchline::dsp::kTone]) h.add (numberOrNull (v));
+        set (hold, "tone", h);
+    }
+    set (root, "hold", hold);
+    if (! productRun.build.isVoid()) set (root, "build", productRun.build);
+    return root;
 }
 
 //==============================================================================
@@ -462,6 +648,9 @@ static int run (int argc, char* argv[])
     auto* product = dynamic_cast<BenchLineAudioProcessor*> (processor.get());
     if (product == nullptr) refuse ("createPluginFilter() did not return the product's processor");
     auto& apvts = product->parameters();
+    product->analyser().setSynchronous (true);
+    productRun.proc = product;
+    product->analyser().onFrame = observeFrame;
 
     if (args.has ("list-presets"))
     {
@@ -563,6 +752,32 @@ static int run (int argc, char* argv[])
         std::sort (r.points.begin(), r.points.end(), [] (auto& x, auto& y) { return x.t < y.t; });
         ramps.push_back (r);
     }
+
+    // -------- Bench Line: target build and selection (product flags)
+    if (args.has ("build-target"))
+    {
+        juce::Array<juce::File> files;
+        for (auto f : juce::StringArray::fromTokens (args.get ("build-target"), ",", ""))
+            if (f.trim().isNotEmpty()) files.add (juce::File::getCurrentWorkingDirectory().getChildFile (f.trim()));
+        const juce::File outFile = args.has ("target-out") ? juce::File::getCurrentWorkingDirectory().getChildFile (args.get ("target-out")) : juce::File();
+        const auto res = benchline::TargetBuild::build (files, args.get ("target-name", "Mine"), outFile, {}, nullptr, ! args.has ("no-cache"));
+        auto b = obj();
+        set (b, "ok", res.ok); set (b, "files", res.files); set (b, "files_failed", res.filesFailed); set (b, "frames", (juce::int64) res.frames);
+        set (b, "seconds", res.seconds); set (b, "file", res.file.getFullPathName()); set (b, "error", res.error);
+        productRun.build = b;
+        if (! res.ok) refuse ("--build-target: " + res.error);
+        juce::String err;
+        if (! product->selectTarget ({ res.name, res.file, false }, &err)) refuse ("--build-target: the written target does not load: " + err);
+    }
+    if (args.has ("target"))
+    {
+        const auto spec = args.get ("target");
+        juce::String err;
+        if (spec == "slope") product->selectTarget ({ "Plain slope", {}, true });
+        else if (spec == "none") product->clearTarget();
+        else if (! product->selectTarget ({ {}, juce::File::getCurrentWorkingDirectory().getChildFile (spec), false }, &err)) refuse ("--target=" + spec + ": " + err);
+    }
+    productRun.dump = args.has ("dump-frames");
 
     // -------- MIDI and input
     std::vector<int> notes;
@@ -697,6 +912,11 @@ static int run (int argc, char* argv[])
         const auto t0 = Clock::now();
         processBlockRealtime (*processor, blockBuf, midi);
         const double us = std::chrono::duration<double, std::micro> (Clock::now() - t0).count();
+        {
+            const auto w0 = Clock::now();
+            product->analyser().pump();   // the worker's job, synchronously (deterministic renders)
+            productRun.workerSeconds += std::chrono::duration<double> (Clock::now() - w0).count();
+        }
         if (profile)
         {
             const double deadlineUs = 1.0e6 * (double) juce::jmax (1, n) / rate;
@@ -715,6 +935,11 @@ static int run (int argc, char* argv[])
         pos += n;
     }
     processor->releaseResources();
+    if (productRun.dump)
+    {
+        auto file = juce::File::getCurrentWorkingDirectory().getChildFile (args.get ("dump-frames"));
+        if (! file.replaceWithText (juce::JSON::toString (juce::var (productRun.frames), true))) refuse ("cannot write --dump-frames");
+    }
 
     // -------- state out
     if (args.has ("state-out"))

@@ -118,7 +118,18 @@ set(PRODUCT_SOURCES
     Source/PluginEditor.cpp
     Source/PluginEditor.h
     Source/Params.h
-    Source/State.h)
+    Source/State.h
+    Source/benchline/Analyser.cpp
+    Source/benchline/Analyser.h
+    Source/benchline/BandBank.h
+    Source/benchline/Engine.cpp
+    Source/benchline/Engine.h
+    Source/benchline/Filters.h
+    Source/benchline/Loudness.h
+    Source/benchline/ReferencesFolder.h
+    Source/benchline/StandIns.cpp
+    Source/benchline/TargetLibrary.cpp
+    Source/benchline/TargetLibrary.h)
 
 target_sources(BenchLine PRIVATE ${PRODUCT_SOURCES})
 target_include_directories(BenchLine PRIVATE Source "${CMAKE_CURRENT_BINARY_DIR}/generated")
@@ -130,6 +141,7 @@ target_compile_definitions(BenchLine
         JUCE_DISPLAY_SPLASH_SCREEN=0
         JUCE_REPORT_APP_USAGE=0
         JUCE_STRICT_REFCOUNTEDPOINTER=1
+        JUCE_USE_MP3AUDIOFORMAT=1
         PRODUCT_IS_INSTRUMENT=$<IF:$<BOOL:${PRODUCT_IS_SYNTH}>,1,0>)
 target_link_libraries(BenchLine
     PRIVATE
@@ -190,7 +202,8 @@ target_include_directories(BenchLineHarness PRIVATE Source "${CMAKE_CURRENT_BINA
     "${CMAKE_CURRENT_BINARY_DIR}/BenchLine_artefacts/JuceLibraryCode")
 target_compile_definitions(BenchLineHarness PRIVATE
     JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_DISPLAY_SPLASH_SCREEN=0 JUCE_REPORT_APP_USAGE=0
-    JUCE_STRICT_REFCOUNTEDPOINTER=1 JUCE_STANDALONE_APPLICATION=1
+    JUCE_STRICT_REFCOUNTEDPOINTER=1 JUCE_STANDALONE_APPLICATION=1 JUCE_USE_MP3AUDIOFORMAT=1
+    "JucePlugin_Name=\"Bench Line\"" "JucePlugin_VersionString=\"${PRODUCT_VERSION}\""
     PRODUCT_IS_INSTRUMENT=$<IF:$<BOOL:${PRODUCT_IS_SYNTH}>,1,0>)
 # The harness compiles the plugin sources itself with its own copy of the modules (simple and
 # portable; Horizon Pad links the SharedCode library instead, which saves a compile).
