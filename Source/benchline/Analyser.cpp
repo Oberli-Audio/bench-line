@@ -166,7 +166,7 @@ int Analyser::pump()
         lastHold = hold;
         targetDirty = true;
     }
-    const bool changed = targetDirty || tol != lastTolerance;
+    const bool changed = targetDirty || ! juce::exactlyEqual (tol, lastTolerance);
     if (frames == 0 && changed)
         tracker.refresh (lastNow, lastSong);   // Tolerance or target changed: edges only, no re-analysis
     lastTolerance = tol;

@@ -9,7 +9,11 @@
       --param=<id>=<plain value>  repeatable, through the parameter
       --target=<file.json>|slope|none
       --in=<file.wav> | --signal=pink   input to analyse first (--seconds, default 12)
-      --state=<none|about|silent|bypass|hold:<s>>   about page; no input; bypass; Hold switched on at s seconds
+      --state=<none|menu|scale-menu|drawer|save|about|licences|silent|bypass|hold:<s>>
+                                  the Strip frame's overlays; no input; bypass; Hold switched on at s seconds
+      --drag=<id>                 a knob's drag readout (average, tolerance)
+    PRESET_ROOT (default: a scratch folder) keeps it away from the real preset and settings folders;
+    BENCHLINE_REFERENCES likewise for the targets.
       --list                      print the states and exit
     Exit 0 written, 2 refused. */
 
@@ -19,7 +23,6 @@
 
 #include "PluginEditor.h"
 #include "PluginProcessor.h"
-#include "benchline/FactoryPresets.h"
 
 #include <iostream>
 #include <random>
@@ -39,8 +42,19 @@ int main (int argc, char* argv[])
         const auto k = s.upToFirstOccurrenceOf ("=", false, false), v = s.fromFirstOccurrenceOf ("=", false, false);
         if (k == "param") params.add (v); else a.set (k, v);
     }
-    if (a.containsKey ("list")) { std::cout << "states: none about silent bypass hold:<seconds>\n"; return 0; }
+    if (a.containsKey ("list")) { std::cout << "states: none menu scale-menu drawer save about licences silent bypass hold:<seconds>\n"; return 0; }
     if (a["out"].isEmpty()) return fail ("--out=<png> is required");
+
+    juce::TemporaryFile scratch;
+    if (juce::SystemStats::getEnvironmentVariable ("PRESET_ROOT", {}).isEmpty())
+    {
+        scratch.getFile().createDirectory();
+       #if JUCE_WINDOWS
+        _putenv_s ("PRESET_ROOT", scratch.getFile().getFullPathName().toRawUTF8());
+       #else
+        setenv ("PRESET_ROOT", scratch.getFile().getFullPathName().toRawUTF8(), 1);
+       #endif
+    }
 
     BenchLineAudioProcessor proc;
     proc.analyser().setSynchronous (true);
@@ -48,10 +62,10 @@ int main (int argc, char* argv[])
     if (a["preset"].isNotEmpty())
     {
         int idx = -1;
-        const auto& bank = benchline::FactoryPresets::list();
-        for (int i = 0; i < bank.size(); ++i) if (bank[i]->slug == a["preset"]) idx = i;
+        const auto& bank = proc.presetLibrary().factoryPresets();
+        for (int i = 0; i < (int) bank.size(); ++i) if (bank[(size_t) i].slug == a["preset"]) idx = i;
         if (idx < 0) return fail ("no factory preset " + a["preset"]);
-        benchline::FactoryPresets::load (apvts, idx);
+        proc.presetLibrary().loadFactory (idx);
     }
     for (auto& pv : params)
     {
@@ -118,12 +132,20 @@ int main (int argc, char* argv[])
     }
     proc.analyser().pump();
 
-    std::unique_ptr<juce::AudioProcessorEditor> ed (proc.createEditorIfNeeded());
+    std::unique_ptr<juce::AudioProcessorEditor> ed (proc.createEditorAndMakeActive());
     auto* editor = dynamic_cast<BenchLineAudioProcessorEditor*> (ed.get());
     if (editor == nullptr) return fail ("no editor");
     const float scale = a["scale"].isEmpty() ? 1.0f : a["scale"].getFloatValue();
-    editor->setGuiScale (1.0f);
-    if (state == "about") editor->showAbout (true);
+    // the frame clock stepped by hand at 60 fps: a second before the overlay, a second after it
+    double now = 1000.0;
+    auto frames = [&] (int n) { for (int i = 0; i < n; ++i) { now += 1.0 / 60.0; editor->advanceFrame (now); } };
+    frames (60);
+    if (state == "menu" || state == "scale-menu") editor->showMenu (state == "scale-menu");
+    else if (state == "drawer") editor->showPresetDrawer();
+    else if (state == "save") editor->showSavePresetCard();
+    else if (state == "about" || state == "licences") editor->showAbout (state == "licences");
+    if (a["drag"].isNotEmpty() && ! editor->previewDrag (a["drag"])) return fail ("no knob for --drag " + a["drag"]);
+    frames (60);
     editor->refreshNow();
     const auto img = editor->createComponentSnapshot (editor->getLocalBounds(), true, scale);
     juce::File out = juce::File::getCurrentWorkingDirectory().getChildFile (a["out"]);

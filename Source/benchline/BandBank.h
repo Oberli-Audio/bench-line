@@ -1,8 +1,7 @@
 #pragma once
 
-/*  STAND-IN for Source/oberli/ Analysis bands (shared code, in progress in bob-skills).
-    Keep this interface; when the shared module lands, wire it in here and let the G5 null test
-    against the model decide (StandIns.md: 0.3 dB per band at every rate, 20-63 Hz included).
+/*  Bench Line's band analysis (StandIns.md: oberli::Spectrum is an FFT on base-2 bands, which G1
+    decision 1 rejected; the G5 null test holds this bank to the model at every rate).
 
     31 base-10 third-octave bands (20 Hz-20 kHz) on two signals (M and S), order-3 Butterworth
     band-pass per band, multirate: a band runs at the lowest octave stage whose rate is >= 5 x

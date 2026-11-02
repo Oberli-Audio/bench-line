@@ -8,6 +8,7 @@
 #include "../Analyser.h"
 #include "../TargetLibrary.h"
 #include "Look.h"
+#include "../../oberli/Buttons.h"
 
 class BenchLineAudioProcessor;
 
@@ -73,7 +74,7 @@ private:
     struct Row { TargetFile t; double spread = 0; bool header = false; juce::String title; juce::Rectangle<int> bounds; };
     BenchLineAudioProcessor& proc;
     juce::Array<Row> rows;
-    juce::TextButton build { "Build from files..." };
+    oberli::ui::ActionButton build { "Build from files...", oberli::ui::ActionButton::Variant::secondary, oberli::ui::front(), oberli::ui::icons::Id::folder };
     std::unique_ptr<juce::FileChooser> chooser;
     double tolerance = 60.0;
     int hover = -1;

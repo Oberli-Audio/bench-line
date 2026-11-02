@@ -1,6 +1,7 @@
 #include "BalanceView.h"
 
 #include "../../PluginProcessor.h"
+#include "../../oberli/StripEditor.h"
 
 namespace benchline::ui
 {
@@ -281,7 +282,7 @@ void SuggestionLines::paint (juce::Graphics& g)
             g.setFont (font (TextStyle::meta));
             g.drawText (sinceText (s), since, juce::Justification::centredRight);
             g.setColour (t.ink);
-            g.setFont (font (TextStyle::body).boldened());
+            g.setFont (font (TextStyle::bodyStrong));
             g.drawFittedText (sentence.substring (0, 1).toUpperCase() + sentence.substring (1), row.toNearestInt(), juce::Justification::centredLeft, 1, 0.9f);
         }
         else if (i == 0 && v.hasTarget && ! snap.silent && v.numSugg == 0 && ! std::isnan (v.median[0]))
@@ -298,7 +299,7 @@ void SuggestionLines::paint (juce::Graphics& g)
 // ------------------------------------------------------------------ target list
 TargetList::TargetList (BenchLineAudioProcessor& p) : proc (p)
 {
-    build.setTooltip ("Analyse your reference songs into a target: the median and spread of their tonal balance.");
+    build.setTooltip ("Analyze your reference songs into a target: the median and spread of their tonal balance.");
     build.setMouseClickGrabsKeyboardFocus (false);
     build.onClick = [this]
     {
@@ -376,7 +377,7 @@ void TargetList::resized()
     for (auto& row : rows)
         row.bounds = r.removeFromTop (row.header ? 26 : 32);
     r.removeFromTop (12);
-    build.setBounds (r.removeFromTop (32).withWidth (juce::jmin (180, r.getWidth())));
+    build.setBounds (r.removeFromTop (oberli::ui::Tokens::controlHeight).withWidth (juce::jmin (build.getPreferredWidth(), r.getWidth())));
 }
 
 void TargetList::paint (juce::Graphics& g)
@@ -395,7 +396,7 @@ void TargetList::paint (juce::Graphics& g)
             {
                 g.setColour (t.inkSubtle);
                 g.setFont (font (TextStyle::meta));
-                g.drawText ("None yet: build one from your references.", b.withTrimmedLeft (6), juce::Justification::centredLeft);
+                g.drawText ("None yet: build one below.", b.withTrimmedLeft (6), juce::Justification::centredLeft);
             }
             else
                 drawCaps (g, row.title, b.withTrimmedLeft (6).withTrimmedTop (6), TextStyle::labelCaps, t.inkMuted);
@@ -415,7 +416,7 @@ void TargetList::paint (juce::Graphics& g)
         g.setColour (t.line);
         g.drawHorizontalLine ((int) b.getBottom(), b.getX(), b.getRight());
         g.setColour (selected ? t.ground : t.ink);
-        g.setFont (font (TextStyle::control).boldened());
+        g.setFont (font (TextStyle::controlStrong));
         g.drawText (row.t.name, b.reduced (8, 0).withTrimmedRight (40), juce::Justification::centredLeft, true);
         g.setColour (selected ? t.ground : t.inkSubtle);
         g.setFont (font (TextStyle::meta));
@@ -470,7 +471,8 @@ void TargetList::mouseUp (const juce::MouseEvent& e)
             }
             juce::String err;
             if (! proc.selectTarget (row.t, &err))
-                juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, "Bench Line", "This target does not load: " + err);
+                if (auto* frame = findParentComponentOfClass<oberli::ui::StripEditor>())   // a readout, never a window
+                    frame->showToast ("This target does not load: " + err, frame->getLocalArea (this, row.bounds));
             repaint();
             return;
         }

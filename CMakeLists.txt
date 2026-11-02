@@ -130,17 +130,10 @@ set(PRODUCT_SOURCES
     Source/benchline/StandIns.cpp
     Source/benchline/TargetLibrary.cpp
     Source/benchline/TargetLibrary.h
-    Source/benchline/FactoryPresets.h
     Source/benchline/ui/BalanceView.cpp
     Source/benchline/ui/BalanceView.h
     Source/benchline/ui/Look.cpp
     Source/benchline/ui/Look.h)
-
-# The factory bank in the binary (presets.csv order), for the header's preset pill
-file(GLOB PRODUCT_PRESET_FILES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/presets/*.oberlipreset")
-juce_add_binary_data(BenchLinePresets HEADER_NAME BenchLinePresets.h NAMESPACE BenchLinePresets
-    SOURCES presets.csv ${PRODUCT_PRESET_FILES})
-set_target_properties(BenchLinePresets PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 # The family's shared code: Source/oberli/ is a byte copy of ~/bob-skills
 # tools/template-src/Source/oberli (Loudness, Analysis, References, RenderSafety, the
@@ -181,7 +174,6 @@ target_link_libraries(BenchLine
     PRIVATE
         OberliUiData
         ProductData
-        BenchLinePresets
         juce::juce_audio_utils
         juce::juce_dsp
     PUBLIC
@@ -247,7 +239,6 @@ target_compile_definitions(BenchLineHarness PRIVATE
 target_sources(BenchLineHarness PRIVATE ${PRODUCT_SOURCES})
 target_link_libraries(BenchLineHarness PRIVATE
     OberliUiData ProductData
-    BenchLinePresets
     juce::juce_audio_utils juce::juce_dsp juce::juce_audio_formats
     juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)
 if (PRODUCT_ASAN)
@@ -281,7 +272,7 @@ target_compile_definitions(BenchLineGuiSnapshot PRIVATE
     JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_DISPLAY_SPLASH_SCREEN=0 JUCE_REPORT_APP_USAGE=0
     JUCE_STRICT_REFCOUNTEDPOINTER=1 JUCE_STANDALONE_APPLICATION=1 JUCE_USE_MP3AUDIOFORMAT=1
     "JucePlugin_Name=\"Bench Line\"" "JucePlugin_VersionString=\"${PRODUCT_VERSION}\"" ${PRODUCT_OBERLI_DEFINITIONS})
-target_link_libraries(BenchLineGuiSnapshot PRIVATE OberliUiData ProductData BenchLinePresets
+target_link_libraries(BenchLineGuiSnapshot PRIVATE OberliUiData ProductData
     juce::juce_audio_utils juce::juce_dsp juce::juce_audio_formats
     juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)
 

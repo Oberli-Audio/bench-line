@@ -1,9 +1,25 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
 #include "State.h"
+#include "oberli/RenderSafety.h"
+
+#include <ProductData.h>
 
 namespace
 {
+/** A file compiled into the plugin (CMakeLists.txt: ProductData) by its name, or an empty block. */
+juce::MemoryBlock productFile (const juce::String& fileName)
+{
+    for (int i = 0; i < ProductData::namedResourceListSize; ++i)
+        if (fileName == ProductData::getNamedResourceOriginalFilename (ProductData::namedResourceList[i]))
+        {
+            int size = 0;
+            const auto* data = ProductData::getNamedResource (ProductData::namedResourceList[i], size);
+            return { data, (size_t) size };
+        }
+    return {};
+}
+
 std::atomic<float>* param (juce::AudioProcessorValueTreeState& apvts, const char* id)
 {
     auto* p = apvts.getRawParameterValue (id);
@@ -84,6 +100,35 @@ BenchLineAudioProcessor::BenchLineAudioProcessor()
 {
     bypassParam = param (apvts, Params::bypassParameterId);
     analysis.bindParameters (param (apvts, Params::average), param (apvts, Params::tolerance), param (apvts, Params::hold));
+    // The factory bank (presets.csv and presets/, compiled in) and the User folder, in the family's
+    // format (State.h). A preset sets the view and the averaging, never a target (brief Q7, EX-1),
+    // and never the host's bypass: a captured state leaves it out (so bypassing does not mark the
+    // preset edited and a saved preset does not carry it) and a recall keeps the current one.
+    presets = std::make_unique<oberli::PresetLibrary> (
+        productFile ("presets.csv").toString(), productFile,
+        [this] (const juce::String& name, const juce::String& category, const juce::String& description, bool factory)
+        {
+            auto doc = benchline::State::presetXml (apvts, name, "", category, description, factory);
+            if (auto* state = doc->getChildByName (benchline::State::kStateTag))
+                if (auto* params = state->getChildByName ("PARAMETERS"))
+                    for (auto* e = params->getFirstChildElement(); e != nullptr; e = e->getNextElement())
+                        if (e->getStringAttribute ("id") == Params::bypassParameterId) { params->removeChildElement (e, true); break; }
+            return doc;
+        },
+        [this] (const juce::XmlElement& document)
+        {
+            auto* state = benchline::State::stateOf (document);
+            auto* bypass = apvts.getParameter (Params::bypassParameterId);
+            const float wasBypassed = bypass->getValue();
+            if (state == nullptr || ! benchline::State::fromXml (*state, apvts))
+                return false;
+            if (! juce::exactlyEqual (bypass->getValue(), wasBypassed))
+                bypass->setValueNotifyingHost (wasBypassed);
+            return true;
+        });
+    // A new instance holds the parameter table's defaults: the Init preset, the bank's first.
+    if (! presets->factoryPresets().empty())
+        presets->restoreActive ("factory:" + presets->factoryPresets().front().slug);
     // init: the target called "Mine" when the library has one, else none (brief, init_patch)
     for (const auto& t : benchline::TargetIO::list())
         if (! t.builtIn && t.name == "Mine") { selectTarget (t); break; }
@@ -143,7 +188,7 @@ void BenchLineAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
         analysis.setSongPosition (t, playing && t >= 0.0);
     }
     const int inputs = juce::jmin (2, getTotalNumInputChannels());
-    if (inputs > 0)
+    if (inputs > 0 && oberli::render::modeFor (*this).feedDisplay)
         analysis.push (buffer.getReadPointer (0), inputs > 1 ? buffer.getReadPointer (1) : nullptr, numSamples);
 }
 
@@ -231,6 +276,8 @@ void BenchLineAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
         tgt->setAttribute ("name", currentTargetName());
         tgt->setAttribute ("file", currentTargetFile().getFullPathName());
         tgt->setAttribute ("builtIn", slopeSelected);
+        if (presets->activeId().isNotEmpty())
+            extra->setAttribute ("preset", presets->activeId());   // which preset the state came from, for the header
         const auto h = analysis.heldState();
         if (h.active)
         {
@@ -287,6 +334,8 @@ bool BenchLineAudioProcessor::loadState (const void* data, int sizeInBytes)
         }
         analysis.restoreHeld (h);
     }
+    const auto* extra = state->getChildByName ("Extra");
+    presets->restoreActive (extra != nullptr ? extra->getStringAttribute ("preset") : juce::String());
     return true;
 }
 

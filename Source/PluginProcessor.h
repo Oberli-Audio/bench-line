@@ -8,6 +8,7 @@
 #include "benchline/Analyser.h"
 #include "Params.h"
 #include "benchline/TargetLibrary.h"
+#include "oberli/PresetLibrary.h"
 
 /*  Bench Line - the processor.
 
@@ -15,7 +16,9 @@
     the output is the input bit for bit and the latency is 0. It copies the block into the
     analyser's FIFO and reads the play-head; nothing else (rule 1). Everything else - the
     analysis, targets, the build - runs off the audio thread (Analyser, TargetLibrary).
-    State: parameters (State.h) plus <Extra> with the selected target and the Hold snapshot. */
+    State: parameters (State.h) plus <Extra> with the selected target, the Hold snapshot and the
+    preset the state came from (the Strip frame's header). Offline (a bounce) the analysis is not
+    fed: nobody watches it, and the audio is the input either way (oberli/RenderSafety.h). */
 class BenchLineAudioProcessor final : public juce::AudioProcessor
 {
 public:
@@ -51,6 +54,11 @@ public:
     juce::AudioProcessorValueTreeState& parameters() { return apvts; }
     benchline::Analyser& analyser() { return analysis; }
 
+    /** The presets (the factory bank compiled in, the User folder, the active one): the Strip
+        frame's header, drawer and menu work on it. Message thread. */
+    oberli::PresetLibrary& presetLibrary() noexcept { return *presets; }
+    oberli::PresetHost& presetHost() noexcept { return *presets; }
+
     // ---- targets (message thread)
     /** Selects a target by its file (empty file and builtIn: the plain slope; both empty: none). */
     bool selectTarget (const benchline::TargetFile& t, juce::String* error = nullptr);
@@ -70,6 +78,7 @@ private:
     juce::AudioProcessorValueTreeState apvts;
     std::atomic<float>* bypassParam = nullptr;
     benchline::Analyser analysis;
+    std::unique_ptr<oberli::PresetLibrary> presets;
     bool slopeSelected = false;
     std::unique_ptr<BuildThread> builder;
     mutable juce::CriticalSection buildLock;

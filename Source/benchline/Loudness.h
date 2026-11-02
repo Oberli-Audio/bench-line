@@ -1,7 +1,7 @@
 #pragma once
 
-/*  STAND-IN for Source/oberli/ Loudness BS.1770 (shared code, in progress in bob-skills).
-    Keep this interface; replace the body by the shared module when it lands (StandIns.md).
+/*  Bench Line's per-sample K-weighting (StandIns.md: oberli::Loudness measures windows and keeps
+    its filters private; the engine filters every sample into its 400 ms frames).
 
     K-weighting (BS.1770) designed for any rate from the prototype, as dspkit.k_weighting_sos
     and libebur128 do: at 48 kHz the printed coefficients, at other rates the matched redesign
