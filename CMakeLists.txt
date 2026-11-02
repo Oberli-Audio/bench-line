@@ -142,7 +142,30 @@ juce_add_binary_data(BenchLinePresets HEADER_NAME BenchLinePresets.h NAMESPACE B
     SOURCES presets.csv ${PRODUCT_PRESET_FILES})
 set_target_properties(BenchLinePresets PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
+# The family's shared code: Source/oberli/ is a byte copy of ~/bob-skills
+# tools/template-src/Source/oberli (Loudness, Analysis, References, RenderSafety, the
+# LookAndFeel and the Strip frame), refreshed with tools/refresh_oberli.py, never edited here.
+file(GLOB OBERLI_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/Source/oberli/*.cpp"
+                                          "${CMAKE_CURRENT_SOURCE_DIR}/Source/oberli/*.h")
+list(APPEND PRODUCT_SOURCES ${OBERLI_SOURCES})
+
 target_sources(BenchLine PRIVATE ${PRODUCT_SOURCES})
+# The shared code's type and marks (Rubik's five static weights as Google Fonts serves them,
+# unmodified, SIL OFL 1.1: LICENSES/OFL-1.1.txt and notices.toml; the Logo group's four SVGs), and
+# the product's own files the plugin reads at run time: LICENSE and THIRD_PARTY_NOTICES.md for
+# About (compiled in, never a URL), presets.csv and the factory bank for the preset drawer.
+file(GLOB OBERLI_ASSETS CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/Source/oberli/assets/fonts/*.ttf"
+                                         "${CMAKE_CURRENT_SOURCE_DIR}/Source/oberli/assets/logo/*.svg")
+juce_add_binary_data(OberliUiData HEADER_NAME OberliUiData.h NAMESPACE OberliUiData SOURCES ${OBERLI_ASSETS})
+set_target_properties(OberliUiData PROPERTIES POSITION_INDEPENDENT_CODE TRUE)
+file(GLOB PRODUCT_FACTORY_PRESETS CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/presets/*.oberlipreset")
+juce_add_binary_data(ProductData HEADER_NAME ProductData.h NAMESPACE ProductData
+    SOURCES LICENSE THIRD_PARTY_NOTICES.md presets.csv ${PRODUCT_FACTORY_PRESETS})
+set_target_properties(ProductData PROPERTIES POSITION_INDEPENDENT_CODE TRUE)
+# The theme by kind (instruments Charcoal, effects Bone) and the accent of the product's category
+# (the registry; plugin-ui-bob brand sheet), read by Source/oberli/OberliLookAndFeel.h.
+set(PRODUCT_OBERLI_DEFINITIONS OBERLI_THEME_BONE=$<IF:$<BOOL:${PRODUCT_IS_SYNTH}>,0,1> OBERLI_ACCENT=0xFF039BE5)
+target_compile_definitions(BenchLine PUBLIC ${PRODUCT_OBERLI_DEFINITIONS})
 target_include_directories(BenchLine PRIVATE Source "${CMAKE_CURRENT_BINARY_DIR}/generated")
 target_compile_definitions(BenchLine
     PUBLIC
@@ -156,6 +179,8 @@ target_compile_definitions(BenchLine
         PRODUCT_IS_INSTRUMENT=$<IF:$<BOOL:${PRODUCT_IS_SYNTH}>,1,0>)
 target_link_libraries(BenchLine
     PRIVATE
+        OberliUiData
+        ProductData
         BenchLinePresets
         juce::juce_audio_utils
         juce::juce_dsp
@@ -216,11 +241,12 @@ target_compile_definitions(BenchLineHarness PRIVATE
     JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_DISPLAY_SPLASH_SCREEN=0 JUCE_REPORT_APP_USAGE=0
     JUCE_STRICT_REFCOUNTEDPOINTER=1 JUCE_STANDALONE_APPLICATION=1 JUCE_USE_MP3AUDIOFORMAT=1
     "JucePlugin_Name=\"Bench Line\"" "JucePlugin_VersionString=\"${PRODUCT_VERSION}\""
-    PRODUCT_IS_INSTRUMENT=$<IF:$<BOOL:${PRODUCT_IS_SYNTH}>,1,0>)
+    PRODUCT_IS_INSTRUMENT=$<IF:$<BOOL:${PRODUCT_IS_SYNTH}>,1,0> ${PRODUCT_OBERLI_DEFINITIONS})
 # The harness compiles the plugin sources itself with its own copy of the modules (simple and
 # portable; Horizon Pad links the SharedCode library instead, which saves a compile).
 target_sources(BenchLineHarness PRIVATE ${PRODUCT_SOURCES})
 target_link_libraries(BenchLineHarness PRIVATE
+    OberliUiData ProductData
     BenchLinePresets
     juce::juce_audio_utils juce::juce_dsp juce::juce_audio_formats
     juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)
@@ -254,8 +280,8 @@ target_include_directories(BenchLineGuiSnapshot PRIVATE Source "${CMAKE_CURRENT_
 target_compile_definitions(BenchLineGuiSnapshot PRIVATE
     JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_DISPLAY_SPLASH_SCREEN=0 JUCE_REPORT_APP_USAGE=0
     JUCE_STRICT_REFCOUNTEDPOINTER=1 JUCE_STANDALONE_APPLICATION=1 JUCE_USE_MP3AUDIOFORMAT=1
-    "JucePlugin_Name=\"Bench Line\"" "JucePlugin_VersionString=\"${PRODUCT_VERSION}\"")
-target_link_libraries(BenchLineGuiSnapshot PRIVATE BenchLinePresets
+    "JucePlugin_Name=\"Bench Line\"" "JucePlugin_VersionString=\"${PRODUCT_VERSION}\"" ${PRODUCT_OBERLI_DEFINITIONS})
+target_link_libraries(BenchLineGuiSnapshot PRIVATE OberliUiData ProductData BenchLinePresets
     juce::juce_audio_utils juce::juce_dsp juce::juce_audio_formats
     juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)
 
@@ -288,6 +314,11 @@ if (Python3_FOUND)
                          --harness "$<TARGET_FILE:BenchLineHarness>" --kind ${PRODUCT_KIND}
                  WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
         set_tests_properties(parameter_table PROPERTIES LABELS "fast;lint")
+        add_test(NAME bounce_null
+                 COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/tests/check_bounce.py"
+                         --harness "$<TARGET_FILE:BenchLineHarness>" --kind ${PRODUCT_KIND} --wire   # a wire: output == input
+                 WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+        set_tests_properties(bounce_null PROPERTIES ENVIRONMENT "${HARNESS_ENV}" LABELS fast)
         add_test(NAME preset_bank
                  COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/scripts/dsp-kit/presetlint.py" bank
                          "${CMAKE_CURRENT_SOURCE_DIR}/presets.csv" --tier S --track ${PRODUCT_KIND} --categories Analyse --harness "$<TARGET_FILE:BenchLineHarness>"
@@ -296,4 +327,37 @@ if (Python3_FOUND)
     else()
         message(STATUS "python3 without numpy and scipy: the test suite is not registered")
     endif()
+endif()
+
+# ---------------------------------------------------------------------------
+# The shared code's own tests (Source/oberli/), label fast: Loudness against EBU Tech 3341
+# and 3342 at 44.1 to 192 kHz (plain C++), and OberliTests for what needs JUCE (Analysis,
+# References, RenderSafety). They need no Python, so they are registered in every build.
+# ---------------------------------------------------------------------------
+enable_testing()
+add_executable(OberliLoudnessTest tools/tests/test_loudness.cpp Source/oberli/Loudness.cpp)
+target_include_directories(OberliLoudnessTest PRIVATE Source)
+# The build presets name the plugin's targets only: CTest builds the two test programs itself first.
+add_test(NAME oberli_build_tests
+         COMMAND "${CMAKE_COMMAND}" --build "${CMAKE_BINARY_DIR}" --config $<CONFIG> --target OberliLoudnessTest OberliTests)
+set_tests_properties(oberli_build_tests PROPERTIES LABELS fast FIXTURES_SETUP oberli_tests)
+add_test(NAME oberli_loudness COMMAND OberliLoudnessTest)
+set_tests_properties(oberli_loudness PROPERTIES LABELS fast FIXTURES_REQUIRED oberli_tests)
+
+juce_add_console_app(OberliTests PRODUCT_NAME "OberliTests")
+target_sources(OberliTests PRIVATE tools/tests/test_oberli.cpp Source/oberli/Analysis.cpp Source/oberli/Folders.cpp
+    Source/oberli/Loudness.cpp Source/oberli/References.cpp)
+target_include_directories(OberliTests PRIVATE Source)
+target_compile_definitions(OberliTests PRIVATE JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_STANDALONE_APPLICATION=1
+    JucePlugin_Name="$<TARGET_PROPERTY:BenchLine,JUCE_PLUGIN_NAME>" JucePlugin_VersionString="${PROJECT_VERSION}")
+target_link_libraries(OberliTests PRIVATE juce::juce_audio_formats juce::juce_dsp juce::juce_gui_basics
+    juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)
+add_test(NAME oberli_shared COMMAND OberliTests)
+set_tests_properties(oberli_shared PROPERTIES LABELS fast FIXTURES_REQUIRED oberli_tests)
+if (Python3_FOUND)
+    # Source/oberli/ is the template's copy, byte for byte (its MANIFEST.sha256)
+    add_test(NAME oberli_copy
+             COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/refresh_oberli.py" --check
+             WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+    set_tests_properties(oberli_copy PROPERTIES LABELS "fast;lint")
 endif()
