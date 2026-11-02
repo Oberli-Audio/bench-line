@@ -1,0 +1,138 @@
+{
+ "band_vs_truth_max_db": {
+  "44100": 0.02433588235591344,
+  "48000": 0.03589881006734075,
+  "88200": 0.040400567678801735,
+  "96000": 0.03441146989545629,
+  "176400": 0.015231169248821175,
+  "192000": 0.028984085075645538
+ },
+ "rate_vs_44100": {
+  "44100": {
+   "max_diff_20Hz_16kHz_db": 0.0,
+   "band20k_vs_first_rate_db": 0.0
+  },
+  "48000": {
+   "max_diff_20Hz_16kHz_db": 0.0291,
+   "band20k_vs_first_rate_db": -0.002
+  },
+  "88200": {
+   "max_diff_20Hz_16kHz_db": 0.1019,
+   "band20k_vs_first_rate_db": 0.003
+  },
+  "96000": {
+   "max_diff_20Hz_16kHz_db": 0.1054,
+   "band20k_vs_first_rate_db": -0.005
+  },
+  "176400": {
+   "max_diff_20Hz_16kHz_db": 0.102,
+   "band20k_vs_first_rate_db": -0.042
+  },
+  "192000": {
+   "max_diff_20Hz_16kHz_db": 0.1054,
+   "band20k_vs_first_rate_db": -0.036
+  }
+ },
+ "sine_at_centre": [
+  {
+   "band": 20,
+   "own_db": 0.007,
+   "next_band_down_db": 17.9
+  },
+  {
+   "band": 63,
+   "own_db": -0.002,
+   "next_band_down_db": 18.0
+  },
+  {
+   "band": 250,
+   "own_db": -0.001,
+   "next_band_down_db": 18.0
+  },
+  {
+   "band": 1000,
+   "own_db": -0.0,
+   "next_band_down_db": 18.0
+  },
+  {
+   "band": 5000,
+   "own_db": -0.0,
+   "next_band_down_db": 17.9
+  },
+  {
+   "band": 16000,
+   "own_db": -0.0,
+   "next_band_down_db": 12.2
+  }
+ ],
+ "ebu3341_short_term_max_err_lu": {
+  "44100": [
+   0.0095,
+   0.0095,
+   0.0165
+  ],
+  "48000": [
+   0.0067,
+   0.0067,
+   0.0137
+  ],
+  "88200": [
+   0.009,
+   0.009,
+   0.0019
+  ],
+  "96000": [
+   0.0106,
+   0.0106,
+   0.0036
+  ],
+  "176400": [
+   0.0195,
+   0.0195,
+   0.0124
+  ],
+  "192000": [
+   0.0203,
+   0.0203,
+   0.0133
+  ]
+ },
+ "build_seconds_model_6x30s": 6.66,
+ "acc2_flat_regions": [
+  "inside",
+  "inside",
+  "inside",
+  "inside",
+  "inside",
+  "inside"
+ ],
+ "acc2_bump_regions": [
+  "inside",
+  "inside",
+  "above",
+  "inside",
+  "below",
+  "below"
+ ],
+ "acc2_lowmid_outside_at_s": 1.7000000000000002,
+ "acc2_suggestion": {
+  "t": 9.700000000000001,
+  "view": "tone",
+  "region": "Low-mid",
+  "hz": 250,
+  "gain_db": -2.0,
+  "q": 0.7,
+  "text": "Low-mid: 2.1 dB above the band around 250 Hz; try about -2.0 dB, Q 0.7."
+ },
+ "acc3_loudness_independence_max_db": 0.0,
+ "gate_shift_max_db": 0.0,
+ "hist_median_vs_weighted_median_max_db": 0.08761293503815892,
+ "slope_target_on_slope_noise": [
+  "inside",
+  "inside",
+  "inside",
+  "inside",
+  "inside",
+  "inside"
+ ]
+}

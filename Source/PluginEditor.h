@@ -4,33 +4,37 @@
 #include <juce_gui_basics/juce_gui_basics.h>
 
 #include "PluginProcessor.h"
+#include "benchline/ui/BalanceView.h"
+#include "benchline/ui/Look.h"
 
-/*  Bench Line - the editor.
+/*  Bench Line - the editor (design plan, docs/sketch.md section 2; brand sheet, Bone, peacock).
 
-    The template's editor is a placeholder: the bone background, the product name, one
-    slider per parameter with the table's tooltips, the version. plugin-ui-bob builds the real
-    editor from the Oberli Audio brand sheet at G2 (Strip layout, the knob of the logo, Rubik, the
-    preset drawer, About on the back) and replaces this file; the processor interface stays. */
-class BenchLineAudioProcessorEditor final : public juce::AudioProcessorEditor
+    960 x 520 at 100 %, scaled as a whole (75/100/150/200 %, a machine-local preference).
+    Header: mark, name, preset pill, version, menu. Body: Target list | Balance (View, Hold,
+    Tolerance, the display, the region marks, the suggestions) | Output (Average, LUFS S).
+    The shared frame, knob and meter are stand-ins until Source/oberli/ lands (StandIns.md). */
+class BenchLineAudioProcessorEditor final : public juce::AudioProcessorEditor, private juce::Timer
 {
 public:
     explicit BenchLineAudioProcessorEditor (BenchLineAudioProcessor&);
-    ~BenchLineAudioProcessorEditor() override = default;
+    ~BenchLineAudioProcessorEditor() override;
 
-    void paint (juce::Graphics&) override;
+    void paint (juce::Graphics&) override {}
     void resized() override;
 
+    /** Snapshot tool and tests: the content at a scale, and a state (about, menu). */
+    void setGuiScale (float s);
+    void showAbout (bool b);
+    void refreshNow();   // one timer tick without waiting
+
 private:
+    class Content;
+    void timerCallback() override;
+
     BenchLineAudioProcessor& processor;
-    juce::TooltipWindow tooltips { this, 500 };
-    struct Control
-    {
-        juce::Slider slider;
-        juce::Label label;
-        std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> attachment;
-    };
-    std::vector<std::unique_ptr<Control>> controls;
-    juce::Label title, version;
+    benchline::ui::BenchLineLook look;
+    std::unique_ptr<Content> content;
+    float scale = 1.0f;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (BenchLineAudioProcessorEditor)
 };

@@ -53,7 +53,7 @@
     }
   ],
   "buildPresets": [
-    { "name": "release", "configurePreset": "release", "configuration": "Release", "targets": [ "BenchLine_VST3", "BenchLine_Standalone", "BenchLineHarness" ] },
+    { "name": "release", "configurePreset": "release", "configuration": "Release", "targets": [ "BenchLine_VST3", "BenchLine_Standalone", "BenchLineHarness", "BenchLineGuiSnapshot" ] },
     { "name": "debug", "configurePreset": "debug", "targets": [ "BenchLine_VST3", "BenchLineHarness" ] },
     { "name": "asan", "configurePreset": "asan", "targets": [ "BenchLine_VST3", "BenchLineHarness" ] },
     { "name": "tsan", "configurePreset": "tsan", "targets": [ "BenchLine_VST3", "BenchLineHarness" ] },

@@ -2,161 +2,124 @@
 #include "PluginEditor.h"
 #include "State.h"
 
-#include <cmath>
-
 namespace
 {
-template <typename T>
-T* param (juce::AudioProcessorValueTreeState& apvts, const char* id)
+std::atomic<float>* param (juce::AudioProcessorValueTreeState& apvts, const char* id)
 {
     auto* p = apvts.getRawParameterValue (id);
     jassert (p != nullptr);   // the table and the code disagree: parameters.csv is the source
     return p;
 }
+
+juce::String joinRow (const std::array<double, benchline::dsp::kBands>& row)
+{
+    juce::StringArray s;
+    for (double v : row) s.add (std::isnan (v) ? juce::String ("nan") : juce::String (v, 4));
+    return s.joinIntoString (" ");
+}
+
+bool parseRow (const juce::String& text, std::array<double, benchline::dsp::kBands>& row)
+{
+    auto parts = juce::StringArray::fromTokens (text, " ", "");
+    if (parts.size() != benchline::dsp::kBands) return false;
+    for (int i = 0; i < benchline::dsp::kBands; ++i)
+    {
+        const auto t = parts[i].trim();
+        row[(size_t) i] = t == "nan" ? std::nan ("") : t.getDoubleValue();
+        if (t != "nan" && ! std::isfinite (row[(size_t) i])) return false;
+    }
+    return true;
+}
 } // namespace
 
+//==============================================================================
+class BenchLineAudioProcessor::BuildThread : public juce::Thread
+{
+public:
+    BuildThread (BenchLineAudioProcessor& p, juce::Array<juce::File> f, juce::String n)
+        : juce::Thread ("Bench Line target build"), owner (p), files (std::move (f)), name (std::move (n)) {}
+    ~BuildThread() override { cancel.store (true); stopThread (10000); }
+    void run() override
+    {
+        auto res = benchline::TargetBuild::build (files, name, {}, [this] (int done, int total)
+        {
+            const juce::ScopedLock sl (owner.buildLock);
+            owner.status.done = done;
+            owner.status.total = total;
+            owner.status.message = "Analyzing " + juce::String (juce::jmin (done + 1, total)) + " of " + juce::String (total);
+        }, &cancel);
+        {
+            const juce::ScopedLock sl (owner.buildLock);
+            owner.status.active = false;
+            owner.status.lastOk = res.ok;
+            owner.status.lastFile = res.file;
+            owner.status.message = res.ok ? (juce::String (res.files - res.filesFailed) + " of " + juce::String (res.files) + " files, "
+                                             + juce::String (res.frames) + " frames, " + juce::String (res.seconds, 1) + " s"
+                                             + (res.filesFailed > 0 ? "; skipped: " + res.error : juce::String()))
+                                          : res.error;
+        }
+        if (res.ok)
+        {
+            auto file = res.file;
+            juce::MessageManager::callAsync ([safe = juce::WeakReference<BuildThread> (this), file, &p = owner]
+            {
+                if (safe != nullptr) p.selectTarget ({ {}, file, false });
+            });
+        }
+    }
+    std::atomic<bool> cancel { false };
+private:
+    BenchLineAudioProcessor& owner;
+    juce::Array<juce::File> files;
+    juce::String name;
+    JUCE_DECLARE_WEAK_REFERENCEABLE (BuildThread)
+};
+
+//==============================================================================
 BenchLineAudioProcessor::BenchLineAudioProcessor()
     : AudioProcessor (BusesProperties()
-#if ! PRODUCT_IS_INSTRUMENT
                           .withInput ("Input", juce::AudioChannelSet::stereo(), true)
-#endif
                           .withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
       apvts (*this, nullptr, "PARAMETERS", Params::createParameterLayout())
 {
-    outGainParam = param<std::atomic<float>> (apvts, Params::outGain);
-#if ! PRODUCT_IS_INSTRUMENT
-    mixParam = param<std::atomic<float>> (apvts, Params::mix);
-    bypassParam = param<std::atomic<float>> (apvts, Params::bypassParameterId);
-#endif
+    bypassParam = param (apvts, Params::bypassParameterId);
+    analysis.bindParameters (param (apvts, Params::average), param (apvts, Params::tolerance), param (apvts, Params::hold));
+    // init: the target called "Mine" when the library has one, else none (brief, init_patch)
+    for (const auto& t : benchline::TargetIO::list())
+        if (! t.builtIn && t.name == "Mine") { selectTarget (t); break; }
+}
+
+BenchLineAudioProcessor::~BenchLineAudioProcessor()
+{
+    builder.reset();
 }
 
 void BenchLineAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
-    currentSampleRate = sampleRate;
-    // smoothing from the table (Params::smoothing): tau in ms -> JUCE ramp length (settle in about 4.6 tau)
-    auto tauMs = [] (const char* id) { for (const auto& s : Params::smoothing) if (std::strcmp (s.id, id) == 0) return s.tauMs; return 0.0f; };
-    gainSmoothed.reset (sampleRate, (double) tauMs (Params::outGain) * 4.6 / 1000.0);
-    gainSmoothed.setCurrentAndTargetValue (juce::Decibels::decibelsToGain (outGainParam->load()));
-#if ! PRODUCT_IS_INSTRUMENT
-    mixSmoothed.reset (sampleRate, (double) tauMs (Params::mix) * 4.6 / 1000.0);
-    mixSmoothed.setCurrentAndTargetValue (mixParam->load() / 100.0f);
-    dryBuffer.setSize (2, juce::jmax (1, samplesPerBlock), false, false, true);
-#else
-    for (auto& v : voices)
-    {
-        v = Voice {};
-        v.env.setSampleRate (sampleRate);
-        v.env.setParameters ({ 0.01f, 0.1f, 0.8f, 0.3f });
-    }
-    sustainDown = false;
-#endif
-    juce::dsp::ProcessSpec spec { sampleRate, (juce::uint32) juce::jmax (1, samplesPerBlock), 1 };
-    for (auto* f : { &rmsFilterL, &rmsFilterR })
-    {
-        f->prepare (spec);
-        f->setLevelCalculationType (juce::dsp::BallisticsFilterLevelCalculationType::RMS);
-        f->setAttackTime (20.0f);
-        f->setReleaseTime (20.0f);
-    }
-    rmsL.store (0.0f);
-    rmsR.store (0.0f);
+    analysis.prepare (sampleRate, samplesPerBlock);
 }
 
 void BenchLineAudioProcessor::releaseResources() {}
 
 bool BenchLineAudioProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
 {
-    if (layouts.getMainOutputChannelSet() != juce::AudioChannelSet::stereo())
-        return false;
-#if ! PRODUCT_IS_INSTRUMENT
-    if (layouts.getMainInputChannelSet() != juce::AudioChannelSet::stereo()
-        && layouts.getMainInputChannelSet() != juce::AudioChannelSet::mono())
-        return false;
-#endif
-    return true;
-}
-
-double BenchLineAudioProcessor::getTailLengthSeconds() const
-{
-#if PRODUCT_IS_INSTRUMENT
-    return 0.3;   // the release of the skeleton's envelope; the real instrument reports its longest tail (D.2.5)
-#else
-    return 0.0;
-#endif
+    const auto in = layouts.getMainInputChannelSet(), out = layouts.getMainOutputChannelSet();
+    if (out != juce::AudioChannelSet::stereo() && out != juce::AudioChannelSet::mono()) return false;
+    return in == out;   // a wire: as many channels out as in
 }
 
 juce::AudioProcessorParameter* BenchLineAudioProcessor::getBypassParameter() const
 {
-#if PRODUCT_IS_INSTRUMENT
-    return nullptr;   // rule 7 does not apply to an instrument
-#else
     return apvts.getParameter (Params::bypassParameterId);
-#endif
 }
 
 void BenchLineAudioProcessor::processBlockBypassed (juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
 {
-    // an effect passes the input through, an instrument is silent; output channels beyond the input are cleared
+    // a wire either way; the analysis pauses while bypassed
     for (int ch = getTotalNumInputChannels(); ch < getTotalNumOutputChannels(); ++ch)
         buffer.clear (ch, 0, buffer.getNumSamples());
+    analysis.setBypassed (true);
 }
-
-#if PRODUCT_IS_INSTRUMENT
-void BenchLineAudioProcessor::noteOn (int note, float velocity)
-{
-    Voice* slot = nullptr;
-    for (auto& v : voices)
-        if (v.note == note) { slot = &v; break; }                  // retrigger the same key
-    if (slot == nullptr)
-        for (auto& v : voices)
-            if (! v.active()) { slot = &v; break; }
-    if (slot == nullptr)
-        for (auto& v : voices)
-            if (! v.env.isActive()) { slot = &v; break; }
-    if (slot == nullptr)
-        slot = &voices[0];                                             // steal the first (the real instrument: oldest released, D.5)
-    slot->note = note;
-    slot->velocity = velocity;
-    slot->phase = 0.0f;
-    slot->env.noteOn();
-}
-
-void BenchLineAudioProcessor::noteOff (int note)
-{
-    for (auto& v : voices)
-        if (v.note == note)
-            v.env.noteOff();
-}
-
-void BenchLineAudioProcessor::renderVoices (juce::AudioBuffer<float>& out, int start, int numSamples)
-{
-    const float bend = std::pow (2.0f, pitchBendSemitones / 12.0f);
-    for (auto& v : voices)
-    {
-        if (! v.active())
-            continue;
-        if (! v.env.isActive())
-        {
-            v.note = -1;
-            continue;
-        }
-        const float hz = 440.0f * std::pow (2.0f, (float) (v.note - 69) / 12.0f) * bend;
-        v.increment = hz / (float) currentSampleRate;
-        auto* l = out.getWritePointer (0);
-        auto* r = out.getNumChannels() > 1 ? out.getWritePointer (1) : nullptr;
-        const float vibrato = modWheel * 0.005f;
-        for (int i = start; i < start + numSamples; ++i)
-        {
-            const float e = v.env.getNextSample();
-            const float s = std::sin (v.phase * juce::MathConstants<float>::twoPi) * v.velocity * 0.2f * e;
-            v.phase += v.increment * (1.0f + vibrato * std::sin ((float) i * 0.001f));
-            if (v.phase >= 1.0f) v.phase -= 1.0f;
-            l[i] += s;
-            if (r != nullptr) r[i] += s;
-        }
-    }
-}
-#endif
 
 void BenchLineAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)
 {
@@ -166,75 +129,22 @@ void BenchLineAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
         buffer.clear (ch, 0, numSamples);
     if (numSamples == 0)   // a zero-length block is legal (harness contract, D.5.1)
         return;
-
-    gainSmoothed.setTargetValue (juce::Decibels::decibelsToGain (outGainParam->load()));
-
-#if PRODUCT_IS_INSTRUMENT
-    buffer.clear();
-    // MIDI at sample offsets (rule 16): split the block at every event
-    int pos = 0;
-    for (const auto metadata : midi)
-    {
-        const auto msg = metadata.getMessage();
-        const int at = juce::jlimit (0, numSamples, metadata.samplePosition);
-        if (at > pos)
-        {
-            renderVoices (buffer, pos, at - pos);
-            pos = at;
-        }
-        if (msg.isNoteOn())            noteOn (msg.getNoteNumber(), msg.getFloatVelocity());
-        else if (msg.isNoteOff())      { if (! sustainDown) noteOff (msg.getNoteNumber()); }
-        else if (msg.isSustainPedalOn())  sustainDown = true;
-        else if (msg.isSustainPedalOff()) { sustainDown = false; for (auto& v : voices) if (v.active()) v.env.noteOff(); }
-        else if (msg.isPitchWheel())   pitchBendSemitones = 2.0f * (float) (msg.getPitchWheelValue() - 8192) / 8192.0f;
-        else if (msg.isController() && msg.getControllerNumber() == 1) modWheel = (float) msg.getControllerValue() / 127.0f;
-        else if (msg.isAllNotesOff() || msg.isAllSoundOff()) { for (auto& v : voices) v = Voice {}; }
-    }
-    if (pos < numSamples)
-        renderVoices (buffer, pos, numSamples - pos);
-    midi.clear();
-#else
-    juce::ignoreUnused (midi);
-    if (bypassParam->load() >= 0.5f)
+    if (bypassParam->load (std::memory_order_relaxed) >= 0.5f)
     {
         processBlockBypassed (buffer, midi);
         return;
     }
-    // the skeleton's "wet" path is the input itself; the real effect renders into the buffer here
-    const int channels = juce::jmin (2, buffer.getNumChannels());
-    for (int ch = 0; ch < channels; ++ch)
-        dryBuffer.copyFrom (ch, 0, buffer, ch, 0, numSamples);
-    mixSmoothed.setTargetValue (mixParam->load() / 100.0f);
-    for (int i = 0; i < numSamples; ++i)
+    analysis.setBypassed (false);
+    if (auto* ph = getPlayHead())
     {
-        const float m = mixSmoothed.getNextValue();
-        const float dry = std::cos (m * juce::MathConstants<float>::halfPi);   // equal power
-        const float wet = std::sin (m * juce::MathConstants<float>::halfPi);
-        for (int ch = 0; ch < channels; ++ch)
-        {
-            auto* out = buffer.getWritePointer (ch);
-            out[i] = dryBuffer.getSample (ch, i) * dry + out[i] * wet;
-        }
+        const auto pos = ph->getPosition();
+        const bool playing = pos.hasValue() && pos->getIsPlaying();
+        const double t = pos.hasValue() && pos->getTimeInSeconds().hasValue() ? *pos->getTimeInSeconds() : -1.0;
+        analysis.setSongPosition (t, playing && t >= 0.0);
     }
-#endif
-
-    // output gain, smoothed per sample (Law 5), then the level the editor shows
-    auto* l = buffer.getWritePointer (0);
-    auto* r = buffer.getNumChannels() > 1 ? buffer.getWritePointer (1) : nullptr;
-    float lastL = 0.0f, lastR = 0.0f;
-    for (int i = 0; i < numSamples; ++i)
-    {
-        const float g = gainSmoothed.getNextValue();
-        l[i] *= g;
-        lastL = rmsFilterL.processSample (0, l[i]);
-        if (r != nullptr)
-        {
-            r[i] *= g;
-            lastR = rmsFilterR.processSample (0, r[i]);
-        }
-    }
-    rmsL.store (lastL, std::memory_order_relaxed);
-    rmsR.store (r != nullptr ? lastR : lastL, std::memory_order_relaxed);
+    const int inputs = juce::jmin (2, getTotalNumInputChannels());
+    if (inputs > 0)
+        analysis.push (buffer.getReadPointer (0), inputs > 1 ? buffer.getReadPointer (1) : nullptr, numSamples);
 }
 
 juce::AudioProcessorEditor* BenchLineAudioProcessor::createEditor()
@@ -242,9 +152,96 @@ juce::AudioProcessorEditor* BenchLineAudioProcessor::createEditor()
     return new BenchLineAudioProcessorEditor (*this);
 }
 
+//==============================================================================
+bool BenchLineAudioProcessor::selectTarget (const benchline::TargetFile& t, juce::String* error)
+{
+    if (t.builtIn)
+    {
+        analysis.setTarget (std::make_shared<benchline::dsp::Target> (benchline::dsp::slopeTarget()), {});
+        slopeSelected = true;
+        return true;
+    }
+    if (t.file == juce::File())
+    {
+        clearTarget();
+        return true;
+    }
+    auto target = std::make_shared<benchline::dsp::Target>();
+    juce::String err;
+    if (! benchline::TargetIO::load (t.file, *target, err))
+    {
+        if (error != nullptr) *error = err;
+        return false;
+    }
+    analysis.setTarget (std::move (target), t.file.getFullPathName());
+    slopeSelected = false;
+    return true;
+}
+
+void BenchLineAudioProcessor::clearTarget()
+{
+    analysis.setTarget (nullptr, {});
+    slopeSelected = false;
+}
+
+juce::String BenchLineAudioProcessor::currentTargetName() const
+{
+    auto t = const_cast<BenchLineAudioProcessor*> (this)->analysis.getTarget();
+    return t != nullptr ? juce::String (t->name) : juce::String();
+}
+
+juce::File BenchLineAudioProcessor::currentTargetFile() const
+{
+    const auto f = const_cast<BenchLineAudioProcessor*> (this)->analysis.getTargetFile();
+    return f.isEmpty() ? juce::File() : juce::File (f);
+}
+
+void BenchLineAudioProcessor::startBuild (const juce::Array<juce::File>& files, const juce::String& name)
+{
+    builder.reset();
+    {
+        const juce::ScopedLock sl (buildLock);
+        status = BuildStatus {};
+        status.active = true;
+        status.total = files.size();
+        status.message = "Analyzing 1 of " + juce::String (files.size());
+    }
+    builder = std::make_unique<BuildThread> (*this, files, name);
+    builder->startThread (juce::Thread::Priority::low);
+}
+
+void BenchLineAudioProcessor::cancelBuild()
+{
+    if (builder != nullptr) builder->cancel.store (true);
+}
+
+BenchLineAudioProcessor::BuildStatus BenchLineAudioProcessor::buildStatus() const
+{
+    const juce::ScopedLock sl (buildLock);
+    return status;
+}
+
+//==============================================================================
 void BenchLineAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
-    copyXmlToBinary (*benchline::State::toXml (apvts), destData);
+    auto xml = benchline::State::toXml (apvts);
+    if (auto* extra = xml->getChildByName ("Extra"))
+    {
+        auto* tgt = extra->createNewChildElement ("Target");
+        tgt->setAttribute ("name", currentTargetName());
+        tgt->setAttribute ("file", currentTargetFile().getFullPathName());
+        tgt->setAttribute ("builtIn", slopeSelected);
+        const auto h = analysis.heldState();
+        if (h.active)
+        {
+            auto* hold = extra->createNewChildElement ("Hold");
+            hold->setAttribute ("since", h.sinceSong);
+            hold->setAttribute ("tone", joinRow (h.medians[benchline::dsp::kTone]));
+            hold->setAttribute ("punch", joinRow (h.medians[benchline::dsp::kPunch]));
+            hold->setAttribute ("side", joinRow (h.medians[benchline::dsp::kSide]));
+        }
+    }
+    copyXmlToBinary (*xml, destData);
 }
 
 void BenchLineAudioProcessor::setStateInformation (const void* data, int sizeInBytes)
@@ -261,7 +258,36 @@ bool BenchLineAudioProcessor::loadState (const void* data, int sizeInBytes)
     if (xml == nullptr)
         return false;
     auto* state = benchline::State::stateOf (*xml);
-    return state != nullptr && benchline::State::fromXml (*state, apvts);
+    if (state == nullptr || ! benchline::State::fromXml (*state, apvts))
+        return false;
+    if (auto* extra = state->getChildByName ("Extra"))
+    {
+        if (auto* tgt = extra->getChildByName ("Target"))
+        {
+            const juce::File f (tgt->getStringAttribute ("file").isNotEmpty() && juce::File::isAbsolutePath (tgt->getStringAttribute ("file"))
+                                    ? juce::File (tgt->getStringAttribute ("file")) : juce::File());
+            if (tgt->getBoolAttribute ("builtIn")) selectTarget ({ "Plain slope", {}, true });
+            else if (f != juce::File() && f.existsAsFile()) selectTarget ({ tgt->getStringAttribute ("name"), f, false });
+            else
+            {
+                // the file moved: look the name up in this machine's library
+                bool found = false;
+                for (const auto& t : benchline::TargetIO::list())
+                    if (! t.builtIn && t.name == tgt->getStringAttribute ("name")) { found = selectTarget (t); break; }
+                if (! found) clearTarget();
+            }
+        }
+        benchline::Analyser::HeldState h;
+        if (auto* hold = extra->getChildByName ("Hold"))
+        {
+            h.active = parseRow (hold->getStringAttribute ("tone"), h.medians[benchline::dsp::kTone])
+                    && parseRow (hold->getStringAttribute ("punch"), h.medians[benchline::dsp::kPunch])
+                    && parseRow (hold->getStringAttribute ("side"), h.medians[benchline::dsp::kSide]);
+            h.sinceSong = hold->getDoubleAttribute ("since", -1.0);
+        }
+        analysis.restoreHeld (h);
+    }
+    return true;
 }
 
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()

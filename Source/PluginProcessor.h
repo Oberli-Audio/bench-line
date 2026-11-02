@@ -1,31 +1,27 @@
 #pragma once
 
 #include <juce_audio_processors/juce_audio_processors.h>
-#include <juce_dsp/juce_dsp.h>
 
-#include <array>
 #include <atomic>
-#include <cstring>
+#include <memory>
 
+#include "benchline/Analyser.h"
 #include "Params.h"
+#include "benchline/TargetLibrary.h"
 
 /*  Bench Line - the processor.
 
-    Thread model (sound-design-bob rule 1, D.1): the audio thread reads parameters through cached
-    atomics, never by string lookup; nothing on the audio thread allocates, locks or logs; every
-    parameter that reaches the audio path is smoothed with the table's tau (Params::smoothing).
-    State is State.h's format. The editor reads what the processor publishes as atomics only.
-
-    This is the template's skeleton: effect with the parameters of parameters.csv (outGain and,
-    for an effect, bypass and mix). sound-design-bob replaces the DSP at G4 behind the same
-    contract; plugin-ui-bob replaces the editor at G2. Keep the lifecycle calls as they are. */
+    The audio path is a wire (structural decision 1): processBlock never writes the buffer, so
+    the output is the input bit for bit and the latency is 0. It copies the block into the
+    analyser's FIFO and reads the play-head; nothing else (rule 1). Everything else - the
+    analysis, targets, the build - runs off the audio thread (Analyser, TargetLibrary).
+    State: parameters (State.h) plus <Extra> with the selected target and the Hold snapshot. */
 class BenchLineAudioProcessor final : public juce::AudioProcessor
 {
 public:
     BenchLineAudioProcessor();
-    ~BenchLineAudioProcessor() override = default;
+    ~BenchLineAudioProcessor() override;
 
-    // AudioProcessor
     void prepareToPlay (double sampleRate, int samplesPerBlock) override;
     void releaseResources() override;
     bool isBusesLayoutSupported (const BusesLayout& layouts) const override;
@@ -36,10 +32,10 @@ public:
     bool hasEditor() const override { return true; }
 
     const juce::String getName() const override { return JucePlugin_Name; }
-    bool acceptsMidi() const override { return PRODUCT_IS_INSTRUMENT != 0; }
+    bool acceptsMidi() const override { return false; }
     bool producesMidi() const override { return false; }
     bool isMidiEffect() const override { return false; }
-    double getTailLengthSeconds() const override;
+    double getTailLengthSeconds() const override { return 0.0; }
     juce::AudioProcessorParameter* getBypassParameter() const override;
 
     int getNumPrograms() override { return 1; }
@@ -50,49 +46,34 @@ public:
 
     void getStateInformation (juce::MemoryBlock& destData) override;
     void setStateInformation (const void* data, int sizeInBytes) override;
-
-    /** setStateInformation's work, with a verdict: false when the bytes are not a state of this
-        plugin (foreign, truncated, newer); the state is then unchanged. The harness reports it. */
     bool loadState (const void* data, int sizeInBytes);
 
-    /** The parameter tree; the editor attaches to it, the harness sets values through it. */
     juce::AudioProcessorValueTreeState& parameters() { return apvts; }
+    benchline::Analyser& analyser() { return analysis; }
 
-    /** What the editor may read from the audio thread: the 20 ms RMS per channel (D.6.2). */
-    float outputLevel (int channel) const noexcept { return channel == 0 ? rmsL.load (std::memory_order_relaxed) : rmsR.load (std::memory_order_relaxed); }
+    // ---- targets (message thread)
+    /** Selects a target by its file (empty file and builtIn: the plain slope; both empty: none). */
+    bool selectTarget (const benchline::TargetFile& t, juce::String* error = nullptr);
+    void clearTarget();
+    juce::String currentTargetName() const;
+    juce::File currentTargetFile() const;
+    bool currentTargetIsSlope() const { return slopeSelected; }
+
+    // ---- building a target from files (a background thread; the editor polls)
+    struct BuildStatus { bool active = false; int done = 0, total = 0; juce::String message; bool lastOk = false; juce::File lastFile; };
+    void startBuild (const juce::Array<juce::File>& files, const juce::String& name);
+    void cancelBuild();
+    BuildStatus buildStatus() const;
 
 private:
+    class BuildThread;
     juce::AudioProcessorValueTreeState apvts;
-
-    // cached parameter pointers (never string lookups on the audio thread)
-    std::atomic<float>* outGainParam = nullptr;
-#if ! PRODUCT_IS_INSTRUMENT
-    std::atomic<float>* mixParam = nullptr;
     std::atomic<float>* bypassParam = nullptr;
-    juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> mixSmoothed;
-    juce::AudioBuffer<float> dryBuffer;
-#else
-    // the skeleton instrument: a tiny polyphonic sine with an ADSR, replaced at G4
-    struct Voice
-    {
-        int note = -1;
-        float phase = 0.0f, increment = 0.0f, velocity = 0.0f;
-        juce::ADSR env;
-        bool active() const noexcept { return note >= 0; }
-    };
-    static constexpr int kMaxVoices = 8;
-    std::array<Voice, kMaxVoices> voices;
-    bool sustainDown = false;
-    float pitchBendSemitones = 0.0f;   // from the wheel, +/- 2 st
-    float modWheel = 0.0f;
-    void noteOn (int note, float velocity);
-    void noteOff (int note);
-    void renderVoices (juce::AudioBuffer<float>& out, int start, int numSamples);
-#endif
-    juce::SmoothedValue<float, juce::ValueSmoothingTypes::Multiplicative> gainSmoothed;
-    double currentSampleRate = 48000.0;
-    std::atomic<float> rmsL { 0.0f }, rmsR { 0.0f };
-    juce::dsp::BallisticsFilter<float> rmsFilterL, rmsFilterR;
+    benchline::Analyser analysis;
+    bool slopeSelected = false;
+    std::unique_ptr<BuildThread> builder;
+    mutable juce::CriticalSection buildLock;
+    BuildStatus status;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (BenchLineAudioProcessor)
 };
