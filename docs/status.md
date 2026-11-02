@@ -4,7 +4,7 @@ Tier P, track A (analysis; plugin kind effect, Bone, accent peacock #039BE5), at
 ## Waiting for Björn
 - Host checks: none yet. Due when CI produces a test bundle (`BenchLine-test-macOS`, `BenchLine-test-Windows` artifacts of the Build workflow on this branch); the list to run is in "Handoff", step 5.
 - Listening (reading the display on your own mixes): none yet. Due together with the host checks.
-- `Source/oberli/` (bob-skills): not in plugin-template yet (checked 2026-11-01, plugin-template ec5ee50). Rubik arrives with the shared LookAndFeel; until then the editor uses JUCE's sans (reads as cheap, plugin-visual-craft 9).
+- `Source/oberli/` (bob-skills): landed in plugin-template 0e7d4f4 (checked 2026-11-02); being wired in (Handoff step 4).
 - paramgen cannot express "60 s reads Song" (parameters.csv note): the editor shows "Song", the host's value string "60 s". Fix in the kit (bob-skills), then regenerate `Source/Params.h`.
 
 ## Gates
@@ -14,7 +14,7 @@ Tier P, track A (analysis; plugin kind effect, Bone, accent peacock #039BE5), at
 | G1 | closed 2026-11-01 | owner: "build"; decisions below |
 | G2 | closed 2026-11-01 | `python3 "sound design/model/g2_check.py"` -> `sound design/model/g2_numbers.json`: band vs full-rate bank <= 0.040 dB (6 rates); rate-to-rate <= 0.105 dB (multitone), 20 kHz band <= 0.042 dB; EBU 3341 short-term cases 1, 2, 9 <= 0.020 LU (6 rates); acceptance 2: Low-mid outside at 1.7 s, suggestion "250 Hz, -2.0 dB, Q 0.7" at 9.7 s; acceptance 3: 0.0 dB; gate shift 0.0 dB; histogram median vs weighted median 0.088 dB (criterion: one 0.1 dB bin); slope target reads slope noise inside |
 | G3 | open | `ctest --test-dir build -L fast` -> 4/4 pass (suite_fast 13 tests, 39 s; harness_contract; parameter_table; preset_bank at S). `HARNESS=... python3 tools/tests/test_plugin.py --label render` -> 12/13 pass on the last full run, the 13th (Side) rewritten and passing alone; rerun in full. Editor: `BenchLineGuiSnapshot` renders at 1x/1.5x/2x; `snapshot_contrast.py --metrics --theme bone` 0 findings on editor@1x, editor@2x, empty@1x; text 5.6-8.2:1. Missing: CPU row (below), code checklist, renders committed |
-| G4 | open | engine, worker, targets, processor (a wire), harness hooks, editor: Linux Release build clean (GCC). macOS/Windows not compiled yet (CI run 41351099528 cancelled) |
+| G4 | open | engine, worker, targets, processor (a wire), harness hooks, editor: Linux Release build clean (GCC). **macOS 2026-11-02**: `cmake --preset release && cmake --build --preset release` (universal arm64 + x86_64, Apple clang) clean, 0 errors; warnings in our code: `PluginEditor.h:34` processor shadows the base member (-Wshadow-field, unused), `Analyser.cpp:169` float `!=` (-Wfloat-equal). `ctest --preset fast` -> 4/4 pass in 15.5 s on the Mac (arm64). Windows not compiled yet |
 | G5 | closed 2026-11-01 | `python3 tools/measure/null_vs_model.py --rates=44100,48000,96000,192000` -> pass at every rate: per-frame max 2.7e-10 dB, gate mismatches 0, targets <= 0.005 dB (0.01 dB frame quantisation), verdicts and suggestion text equal |
 | G6 | - | validators via CI (`validate_plugin.py --profile quick` in build.yml); full profile, hosts |
 | G7 | - | |
@@ -39,6 +39,7 @@ Task: Bench Line Tier P, from G3/G4 to the release gate. Plan:
 4. [ ] When `Source/oberli/` lands in plugin-template: refresh it, wire it in behind the stand-ins (StandIns.md), rerun G5 and the snapshots
 5. [ ] Host checks for Björn (Live 10.1 under Rosetta, Live on Windows): load on the master; pass-through null (insert Utility with phase invert on a duplicate track); build a target from 6 songs and time it; Tone/Punch/Side; Hold, save and reopen the project (target and hold come back); automation of View and Average; editor at 100/150/200 %; CPU meter idle and playing; space bar reaches the transport
 6. [ ] G6: `validate_plugin.py --profile full`, pluginval L10, state from this version loads (golden state test), corrupted state; G7: docs/parameters.md regenerated, README and manual (ship-bob templates), notices (JUCE formats: FLAC, Ogg Vorbis, MP3 decoder), release gate, then ship-bob
+Machine note (2026-11-02): CMake finds Homebrew's python3.12 without numpy/scipy and then registers no tests ("No tests were found"); configure with `-DPython3_EXECUTABLE=/usr/bin/python3` (CLT 3.9, numpy 2.0.2, scipy 1.13.1).
 Working tree: clean after the handoff commit. Build: green on Linux (Release). Tests: fast 4/4; render 12/13 + Side alone.
 Next command: `cmake --preset release && cmake --build --preset release && ctest --preset fast`
 
