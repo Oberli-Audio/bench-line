@@ -75,38 +75,39 @@ void Analyser::setSongPosition (double seconds, bool playing) noexcept
     songAtSample.store (pushedSamples.load (std::memory_order_relaxed), std::memory_order_relaxed);
 }
 
+// The message thread's side: shareMutex only, so a read never waits for a pump (the worker
+// takes up the change at the start of its next one).
 void Analyser::setTarget (std::shared_ptr<const dsp::Target> t, const juce::String& file)
 {
-    std::lock_guard<std::mutex> lock (workMutex);
+    std::lock_guard<std::mutex> lock (shareMutex);
     target = std::move (t);
     targetFile = file;
-    targetDirty = true;
+    targetChanged = true;
 }
 
 std::shared_ptr<const dsp::Target> Analyser::getTarget() const
 {
-    std::lock_guard<std::mutex> lock (workMutex);
+    std::lock_guard<std::mutex> lock (shareMutex);
     return target;
 }
 
 juce::String Analyser::getTargetFile() const
 {
-    std::lock_guard<std::mutex> lock (workMutex);
+    std::lock_guard<std::mutex> lock (shareMutex);
     return targetFile;
 }
 
 Analyser::HeldState Analyser::heldState() const
 {
-    std::lock_guard<std::mutex> lock (workMutex);
+    std::lock_guard<std::mutex> lock (shareMutex);
     return held;
 }
 
 void Analyser::restoreHeld (const HeldState& h)
 {
-    std::lock_guard<std::mutex> lock (workMutex);
+    std::lock_guard<std::mutex> lock (shareMutex);
     held = h;
-    lastHold = h.active;   // the hold parameter is restored with the same state, no new snapshot
-    targetDirty = true;
+    heldRestored = true;   // the hold parameter is restored with the same state, no new snapshot
 }
 
 int Analyser::pump()
@@ -115,7 +116,12 @@ int Analyser::pump()
     std::lock_guard<std::mutex> lock (workMutex);
     if (! prepared.load()) return 0;
     juce::ScopedNoDenormals noDenormals;
-    tracker.setTarget (target.get());
+    {
+        std::lock_guard<std::mutex> share (shareMutex);
+        if (targetChanged) { workTarget = target; targetChanged = false; targetDirty = true; }
+        if (heldRestored) { workHeld = held; lastHold = held.active; heldRestored = false; targetDirty = true; }
+    }
+    tracker.setTarget (workTarget.get());
     if (averageParam != nullptr) tracker.setAverage (juce::jlimit (1.0, 60.0, (double) averageParam->load()));
     const float tol = toleranceParam != nullptr ? toleranceParam->load() : 60.0f;
     tracker.setTolerance (tol);
@@ -137,11 +143,14 @@ int Analyser::pump()
         if (onFrame) onFrame (f, tracker);
     };
     std::function<void (const dsp::Frame&)> cb = handle;
-    for (;;)
+    // only what is there now: audio arriving faster than the worker drains it (a host rendering
+    // ahead, pluginval) must not keep one pump, and workMutex, going for ever
+    for (int budget = fifo.getNumReady(); budget > 0;)
     {
         int start1, size1, start2, size2;
-        const int want = juce::jmin (fifo.getNumReady(), (int) scratchL.size());
+        const int want = juce::jmin (budget, fifo.getNumReady(), (int) scratchL.size());
         if (want <= 0) break;
+        budget -= want;
         fifo.prepareToRead (want, start1, size1, start2, size2);
         std::memcpy (scratchL.data(), fifoData.getReadPointer (0, start1), sizeof (float) * (size_t) size1);
         std::memcpy (scratchR.data(), fifoData.getReadPointer (1, start1), sizeof (float) * (size_t) size1);
@@ -157,14 +166,16 @@ int Analyser::pump()
     const bool hold = holdParam != nullptr && holdParam->load() >= 0.5f;
     if (hold != lastHold)
     {
-        held.active = hold;
+        workHeld.active = hold;
         if (hold)
         {
-            for (int v = 0; v < 3; ++v) held.medians[(size_t) v] = tracker.view (v).median;
-            held.sinceSong = lastSong >= 0 ? lastSong : lastNow;
+            for (int v = 0; v < 3; ++v) workHeld.medians[(size_t) v] = tracker.view (v).median;
+            workHeld.sinceSong = lastSong >= 0 ? lastSong : lastNow;
         }
         lastHold = hold;
         targetDirty = true;
+        std::lock_guard<std::mutex> share (shareMutex);
+        held = workHeld;
     }
     const bool changed = targetDirty || ! juce::exactlyEqual (tol, lastTolerance);
     if (frames == 0 && changed)
@@ -205,12 +216,12 @@ void Analyser::publish()
             b.sinceSeconds = a.sinceSeconds; b.sinceSong = a.sinceSong;
             std::strncpy (b.text, a.text.c_str(), Snapshot::kTextLen - 1);
         }
-        if (target != nullptr)
+        if (workTarget != nullptr)
         {
             const std::array<double, dsp::kPercentiles>* rows = nullptr;
-            if (v == dsp::kTone && target->hasTone) rows = target->tone.data();
-            if (v == dsp::kSide && target->hasSide) rows = target->side.data();
-            if (v == dsp::kPunch && target->hasPunch) rows = target->punch.data();
+            if (v == dsp::kTone && workTarget->hasTone) rows = workTarget->tone.data();
+            if (v == dsp::kSide && workTarget->hasSide) rows = workTarget->side.data();
+            if (v == dsp::kPunch && workTarget->hasPunch) rows = workTarget->punch.data();
             dst.hasTarget = rows != nullptr;
             if (rows != nullptr)
                 for (int i = 0; i < dst.count; ++i)
@@ -220,9 +231,9 @@ void Analyser::publish()
                 }
         }
     }
-    s.holdActive = held.active;
-    s.held = held.medians;
-    s.heldSinceSong = held.sinceSong;
+    s.holdActive = workHeld.active;
+    s.held = workHeld.medians;
+    s.heldSinceSong = workHeld.sinceSong;
     s.shortTermLufs = engine.shortTermLufs();
     s.momentaryLufs = engine.momentaryLufs();
     s.engineSeconds = (double) engine.samplesSeen() / engine.sampleRate();
@@ -232,7 +243,7 @@ void Analyser::publish()
     s.framesAnalysed = framesAnalysed;
     s.overflowSamples = overflow.load();
     s.sampleRate = engine.sampleRate();
-    if (target != nullptr) std::strncpy (s.targetName, target->name.c_str(), sizeof (s.targetName) - 1);
+    if (workTarget != nullptr) std::strncpy (s.targetName, workTarget->name.c_str(), sizeof (s.targetName) - 1);
     std::lock_guard<std::mutex> lock (snapMutex);
     s.serial = snap.serial + 1;
     snap = s;

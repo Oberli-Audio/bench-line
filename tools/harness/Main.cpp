@@ -29,6 +29,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
+#include <thread>
 #include <map>
 #include <random>
 #include <vector>
@@ -224,6 +225,8 @@ const char* const kUsage =
     "  --solo=<part>                product-specific isolation (see the hooks at the end of Main.cpp)\n"
     "  --non-realtime               render as a bounce: setNonRealtime (true) (oberli/RenderSafety.h, check_bounce.py)\n"
     "  --list-params | --list-presets   JSON lists; exit\n"
+    "  --lock-wait=<s>              the editor's reads timed while the real worker drains audio pushed\n"
+    "                               faster than real time for s seconds (pluginval: editor whilst processing); exit\n"
     "Bench Line (product flags):\n"
     "  --target=<file.json>|slope   compare against a target file or the built-in plain slope\n"
     "  --build-target=<a,b,...>     build a target from audio files first (then it is the target);\n"
@@ -254,7 +257,7 @@ Args parseArgs (int argc, char* argv[])
     static const juce::StringArray known { "help", "seed", "sample-rate", "block", "max-block", "seconds", "preset", "param",
         "automate", "bend", "mod", "notes", "midi", "gate", "reprepare-at", "in", "signal", "out", "state-in", "state-out",
         "profile", "preset-at", "warmup", "solo", "list-params", "list-presets", "non-realtime",
-        "target", "build-target", "target-name", "target-out", "dump-frames", "no-cache" };
+        "target", "build-target", "target-name", "target-out", "dump-frames", "no-cache", "lock-wait" };
     Args a;
     for (int i = 1; i < argc; ++i)
     {
@@ -674,6 +677,47 @@ static int run (int argc, char* argv[])
                 list.append (o);
             }
         std::cout << juce::JSON::toString (list, true) << std::endl;
+        return 0;
+    }
+    if (args.has ("lock-wait"))
+    {
+        // pluginval's "Open editor whilst processing" hung on the worker's lock (docs/failures.md):
+        // a producer thread pushes as fast as it can, the real worker thread drains, and this thread
+        // times what the editor reads every frame (target name and file, Hold, the snapshot)
+        const double secs = numberOr (args.get ("lock-wait"), "--lock-wait");
+        auto& an = product->analyser();
+        an.setSynchronous (false);
+        product->prepareToPlay (48000.0, 512);   // starts the worker
+        std::atomic<bool> done { false };
+        std::thread producer ([&]
+        {
+            std::vector<float> l (512), r (512);
+            juce::Random rng (1);
+            const auto end = juce::Time::getMillisecondCounterHiRes() + secs * 1000.0;
+            while (juce::Time::getMillisecondCounterHiRes() < end)
+            {
+                for (size_t i = 0; i < l.size(); ++i) { l[i] = rng.nextFloat() * 0.2f - 0.1f; r[i] = l[i]; }
+                an.push (l.data(), r.data(), (int) l.size());
+            }
+            done.store (true);
+        });
+        double worstMs = 0.0;
+        int reads = 0;
+        while (! done.load())
+        {
+            const auto t0 = juce::Time::getMillisecondCounterHiRes();
+            juce::ignoreUnused (product->currentTargetName(), product->currentTargetFile(), an.heldState(), an.snapshot());
+            worstMs = juce::jmax (worstMs, juce::Time::getMillisecondCounterHiRes() - t0);
+            ++reads;
+            juce::Thread::sleep (1);
+        }
+        producer.join();
+        product->releaseResources();
+        auto o = obj();
+        set (o, "seconds", secs); set (o, "reads", reads); set (o, "max_wait_ms", worstMs);
+        auto root = obj();
+        set (root, "lock_wait", o);
+        std::cout << juce::JSON::toString (root, true) << std::endl;
         return 0;
     }
 

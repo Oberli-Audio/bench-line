@@ -263,6 +263,16 @@ class Wire(Timed):
             self.assertNotEqual(r.returncode, 0, "the self-test allocation did not abort: the trap is not armed")
             self.assertIn("malloc trap", r.stderr)
 
+    def test_editor_reads_do_not_wait_for_a_draining_worker(self):         # D.5, pluginval "Open editor whilst processing"
+        # Audio pushed faster than real time kept the worker's drain loop (and its lock) busy, so
+        # the editor's paint waited on it until pluginval's 1 min timeout (docs/failures.md).
+        import subprocess, json
+        r = subprocess.run([HARNESS, "--lock-wait=2"], capture_output=True, text=True, timeout=60)
+        self.assertEqual(r.returncode, 0, r.stderr[-400:])
+        res = json.loads(r.stdout)["lock_wait"]
+        self.assertGreater(res["reads"], 10)
+        self.assertLess(res["max_wait_ms"], 100.0, "an editor read waited %.0f ms for the worker" % res["max_wait_ms"])
+
 
 class DefiningFeatures(Timed):
     """Rule 13: one presence test per defining feature in brief.md. Each was shown failing on an

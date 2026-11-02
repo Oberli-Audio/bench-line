@@ -99,18 +99,25 @@ private:
     std::atomic<bool> bypassed { false };
     std::atomic<bool> prepared { false };
 
-    // worker side
-    mutable std::mutex workMutex;   // engine, tracker, target (never taken by the audio thread)
+    // worker side: workMutex is held for a whole pump, so no message-thread read takes it
+    mutable std::mutex workMutex;   // engine, tracker, the worker's copies (never taken by the audio thread)
     dsp::Engine engine;
     dsp::Tracker tracker;
+    std::shared_ptr<const dsp::Target> workTarget;
+    HeldState workHeld;
+
+    // shared with the message thread: held only for a copy (docs/failures.md, pluginval's
+    // "Open editor whilst processing"); the worker takes it after workMutex, never the other way
+    mutable std::mutex shareMutex;
     std::shared_ptr<const dsp::Target> target;
     juce::String targetFile;
+    HeldState held;
+    bool targetChanged = false, heldRestored = false;
     std::atomic<float>* averageParam = nullptr;
     std::atomic<float>* toleranceParam = nullptr;
     std::atomic<float>* holdParam = nullptr;
     float lastTolerance = -1.0f;
     bool lastHold = false, targetDirty = true;
-    HeldState held;
     double lastNow = 0, lastSong = -1;
     juce::int64 framesAnalysed = 0;
     std::vector<float> scratchL, scratchR;

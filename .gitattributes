@@ -1,0 +1,3 @@
+# Source/oberli/ is a byte copy of the template (MANIFEST.sha256, CTest oberli_copy): never
+# convert its line endings on checkout (Windows), or every file reads as edited.
+Source/oberli/** -text
