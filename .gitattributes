@@ -1,3 +1,6 @@
 # Source/oberli/ is a byte copy of the template (MANIFEST.sha256, CTest oberli_copy): never
 # convert its line endings on checkout (Windows), or every file reads as edited.
 Source/oberli/** -text
+
+# frozen session states (tools/tests/states/<version>.state): bytes, never converted
+*.state binary

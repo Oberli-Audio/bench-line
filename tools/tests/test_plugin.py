@@ -33,6 +33,7 @@ RATES = (44100, 48000, 88200, 96000, 176400, 192000)
 BLOCKS = (0, 1, 13, 32, 64, 512, 4096)
 INSTRUMENT = "notes" in SOURCE
 FAST_BUDGET_S = float(os.environ.get("FAST_BUDGET_S", "20"))   # one test; the whole `fast` label stays under 60 s
+STATES = Path(__file__).resolve().parent / "states"   # one frozen session state per released version (rule 19)
 # F.8 tolerances (peak of the residual, absolute dBFS, no alignment): same machine and
 # compiler bit-exact; across slices feed-forward -100, feedback tails -80.
 GOLDEN_PEAK_DB = {"same": -140.0, "cross-feedforward": -100.0, "cross-feedback": -80.0}
@@ -171,6 +172,25 @@ class Properties(Timed):
                     self.assertEqual(res["health"]["nan"], 0)
 
 
+    def test_state_from_every_release_loads(self):                         # rule 19, D.5: tools/tests/states/<version>.state
+        # one session per released version, frozen when it shipped: View Punch, Average 36 s,
+        # Tolerance 75 %, Hold on (31 frozen medians) and the built-in slope target
+        expected = {"0.1.0": {"view": 0.5, "average": 0.6, "tolerance": 0.625, "hold": 1.0}}
+        held_tone = {"0.1.0": {0: -19.6300, 15: -19.0059, 30: -18.6754}}   # dB, bands 20 Hz, 630 Hz, 20 kHz as frozen
+        for version, params in expected.items():
+            with self.subTest(version=version):
+                res = run(state_in=STATES / ("%s.state" % version), seconds=0.25)
+                for pid, val in params.items():
+                    self.assertAlmostEqual(res["applied"]["params"][pid], val, places=5, msg="%s: %s" % (version, pid))
+                hold = res["product"]["hold"]
+                self.assertTrue(hold["active"], "%s: Hold did not come back" % version)
+                self.assertEqual(len(hold["tone"]), 31)
+                self.assertTrue(all(v is not None and np.isfinite(v) for v in hold["tone"]), "%s: the frozen medians did not come back" % version)
+                for band, db in held_tone[version].items():
+                    self.assertAlmostEqual(hold["tone"][band], db, delta=0.01, msg="%s: frozen median, band %d" % (version, band))
+                self.assertEqual(res["product"]["target"], "Plain slope")
+
+
 class Goldens(Timed):
     """F.13.6: a golden per defining feature, rendered on GOLDEN_ARCH, with a sidecar."""
     label = "render"
@@ -256,12 +276,15 @@ class Wire(Timed):
         res = bench(signal="impulse", seconds=0.1)
         self.assertEqual(res["applied"]["latency_samples"], 0)
 
-    def test_malloc_trap_is_live(self):                                    # rule 1: the trap itself
+    def test_malloc_trap_is_live(self):                                    # rule 1: the real-time check itself
+        # the RTSan build (preset rtsan) carries RealtimeSanitizer instead of the trap: test the one it has
         import subprocess
-        r = subprocess.run([HARNESS, "--seconds=0.05"], env=dict(os.environ, PRODUCT_MALLOC_TRAP_SELFTEST="1"), capture_output=True, text=True)
+        check = bench(seconds=0.01)["applied"]["build"].get("rt_check", "malloc-trap")
+        selftest, marker = ("PRODUCT_RTSAN_SELFTEST", "RealtimeSanitizer") if check == "rtsan" else ("PRODUCT_MALLOC_TRAP_SELFTEST", "malloc trap")
+        r = subprocess.run([HARNESS, "--seconds=0.05"], env=dict(os.environ, **{selftest: "1"}), capture_output=True, text=True)
         if sys.platform.startswith("linux") or sys.platform == "darwin":
-            self.assertNotEqual(r.returncode, 0, "the self-test allocation did not abort: the trap is not armed")
-            self.assertIn("malloc trap", r.stderr)
+            self.assertNotEqual(r.returncode, 0, "the self-test allocation did not abort: the %s is not armed" % check)
+            self.assertIn(marker, r.stderr)
 
     def test_editor_reads_do_not_wait_for_a_draining_worker(self):         # D.5, pluginval "Open editor whilst processing"
         # Audio pushed faster than real time kept the worker's drain loop (and its lock) busy, so

@@ -1060,6 +1060,7 @@ static int run (int argc, char* argv[])
        #else
         set (build, "arch", "x86_64");
        #endif
+        set (build, "rt_check", PRODUCT_HAS_RTSAN ? "rtsan" : "malloc-trap");   // which real-time check this harness carries
         set (applied, "build", build);
         set (root, "applied", applied);
     }
